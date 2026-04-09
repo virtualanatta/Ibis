@@ -1,38 +1,42 @@
-# Especificaciones del hardware y software
+# Especificaciones del Hardware y Software
 
-## Nodo de cómputo
-**MSI Cubi NUC 1M-226BES | Barebone**: Este equipo fue seleccionado por su excelente equilibrio entre consumo energético contenido y potencia de procesamiento. Al basarse en una arquitectura **x86**, nos garantiza una compatibilidad total con el ecosistema de contenedores Docker profesionales, evitando los problemas de dependencias y librerías que suelen aparecer en arquitecturas ARM (como las Raspberry Pi) en entornos de producción.
+Para que el proyecto CRIMSA sea una solución profesional y no un simple experimento, la elección de los componentes y el sistema base fue fundamental. Buscábamos un equilibrio entre potencia, consumo eléctrico y, sobre todo, una fiabilidad absoluta para que los datos nunca corrieran peligro.
 
-## Nodo de almacenamiento
-**QNAP TR-002 Caja RAID USB-C 3.1**: Se trata de una unidad de expansión de 2 bahías SATA de 2,5"/3,5". La característica técnica fundamental es que la gestión del **RAID se realiza por hardware**. Esto es vital, ya que libera de carga de trabajo al procesador del NUC, permitiendo que este dedique todos sus recursos exclusivamente a correr los microservicios y la lógica de negocio sin latencias en el I/O de disco.
+## Nodo de cómputo: MSI Cubi NUC 1M-226BES
 
-## VPN y Red Privada
-**Tailscale + Samba**: Para la conectividad, implementamos un modelo de **"Exposición Cero"**. Utilizamos Tailscale para crear un túnel cifrado basado en el protocolo **WireGuard**, lo que nos permite saltarnos los firewalls restrictivos (como los de una escuela o universidad) sin necesidad de abrir un solo puerto en el router personal. Complementamos esto con Samba para mapear los 4 TB de almacenamiento directamente en nuestro equipo de trabajo como una unidad de red local segura.
+Como cerebro del sistema elegimos un MSI Cubi NUC 1M-226BES en formato Barebone. La razón principal de esta elección, más allá de su tamaño compacto, es su arquitectura x86. Al trabajar con servidores de producción y contenedores Docker, las arquitecturas ARM (como las de una Raspberry Pi) suelen dar quebraderos de cabeza con dependencias y librerías que no están optimizadas. Con este NUC nos aseguramos de que cualquier software profesional funcione a la primera, manteniendo un consumo de energía bajísimo para un equipo que está encendido las 24 horas.
 
-# Almacenamiento y Copia de seguridad
+## Nodo de almacenamiento: QNAP TR-002
 
-### 1. Apertura y conexión de los dispositivos y sus periféricos
-Antes de proceder al encendido inicial, realizamos una inspección física detallada para asegurar que el cableado y los puertos no presentaran inconvenientes. Establecimos un orden de conexión estratégico para asegurar que la BIOS detectara todos los componentes correctamente:
+Para los datos masivos no podíamos depender de discos externos convencionales. Optamos por una caja RAID QNAP TR-002 con dos bahías SATA. Lo mejor de este hardware es que gestiona el RAID por su cuenta mediante interruptores físicos (DIP switches). Esto significa que el procesador del NUC no tiene que gastar ni un solo ciclo de trabajo en mantener el espejo de los discos; de eso se encarga la controladora del QNAP, dejando el servidor libre para gestionar el campus y las bases de datos sin latencia.
 
-1. **Periféricos de control**: Ratón inalámbrico y teclado (necesarios para la interfaz de configuración inicial).
-2. **Salida de vídeo**: Conexión a TV (en este punto surgió el primer conflicto de resolución).
-3. **Unidad de arranque**: USB configurado con **Ventoy** conteniendo la imagen de Ubuntu.
-4. **Cómputo**: Encendido del MSI Cubi NUC.
-5. **Almacenamiento**: Activación de la unidad QNAP.
-6. **Red**: Conexión al Router personal para la salida a internet y asignación de IP estática en la LAN.
+## Capa de Software y Conectividad Segura
 
-### 2. Descarga e instalación del sistema operativo y software
-Se procedió a la instalación de **Ubuntu 24.04.4 LTS**. Durante este proceso sufrimos un percance técnico relevante: la señal de vídeo enviada a la TV escaló la interfaz de configuración a un tamaño tan diminuto que resultaba prácticamente ilegible.
+El sistema corre sobre Ubuntu Server 24.04.4 LTS. Elegimos esta versión por ser la más actual con soporte de largo plazo, lo que nos da tranquilidad durante años. En cuanto a la red, implementamos un modelo de "Exposición Cero" combinando Tailscale y Samba.
 
-* **Impacto y resolución**: Debido a la falta de visibilidad, cometimos errores tipográficos al introducir los datos de usuario y red. Esto nos obligó a realizar la **reinstalación completa del sistema operativo en dos ocasiones** adicionales. Fue una decisión necesaria para garantizar que las credenciales de root y la configuración base fueran perfectas, evitando arrastrar errores de configuración a las fases críticas de producción.
+Tailscale nos crea una red privada (VPN) usando el protocolo WireGuard, permitiéndonos entrar al servidor desde cualquier sitio (casa o escuela) sin tener que abrir puertos en el router, lo cual es un agujero de seguridad. Por otro lado, usamos Samba para mapear los 4 TB del servidor como si fuera un disco duro más en nuestro portátil, pero siempre bajo el túnel seguro de la VPN. Aunque Samba ha tenido fama de vulnerable en el pasado, usamos la versión SMB3 parcheada y cifrada para que la transferencia de archivos sea totalmente privada.
 
-### 3. Configuración del sistema de archivos y RAID
-El DAS QNAP fue configurado bajo un esquema de **RAID 1 (Mirroring)**.
+## Instalación y Configuración Inicial
 
-* **Justificación técnica**: Priorizamos la integridad de los datos sobre la capacidad total. El RAID 1 crea un espejo exacto en ambos discos; si una unidad falla físicamente, la segunda asume el control total sin pérdida de información ni tiempo de inactividad. Es una configuración esencial para un servidor que debe ser robusto y estar disponible 24/7.
-* **Persistencia**: Para asegurar que el montaje del disco sea infalible tras cada reinicio, configuramos el archivo `/etc/fstab` utilizando el **UUID** del disco. Esto evita que el sistema se bloquee o falle si los identificadores de los puertos USB cambian dinámicamente.
+El montaje no fue simplemente conectar cables; seguimos una metodología estricta para asegurar que cada componente fuera reconocido por el sistema desde el primer segundo.
 
-### 4. Tailscale y Samba: Conectividad y Acceso
-La implementación de **Tailscale** ha sido la base del éxito en la conectividad del proyecto. Nos proporciona una IP privada estable y segura, permitiendo la administración total del servidor mediante **SSH** desde cualquier red externa de forma totalmente transparente.
+### Conexión de dispositivos y periféricos
 
-* **Samba y Seguridad**: Configuramos Samba para la gestión de los 4 TB de datos. Para mitigar vulnerabilidades históricas de este protocolo, forzamos el uso de **SMB3** con parches actualizados y cifrado de datos. De esta forma, el almacenamiento masivo aparece como una unidad Z: en nuestro portátil de trabajo, pero el acceso está estrictamente limitado a cuando el túnel de la VPN está activo, añadiendo una capa de seguridad perimetral robusta.
+Antes de dar corriente al sistema, comprobamos que todo el cableado estuviera en perfecto estado. El orden que seguimos fue este:
+
+1. Conectamos los periféricos (ratón y teclado inalámbricos) para tener el control total desde el inicio.
+2. Enlazamos el monitor a una TV (aquí es donde empezaron las curvas).
+3. Pinchamos el USB con Ventoy, que ya tenía cargada la imagen de Ubuntu.
+4. Encendimos el NUC para entrar en la BIOS.
+5. Activamos el QNAP para que fuera detectado como unidad de almacenamiento.
+6. Finalmente, conectamos el cable de red al router para tener salida a internet.
+
+### El tropiezo con la resolución y el sistema operativo
+
+Instalar Ubuntu 24.04.4 LTS parecía un trámite, pero la tecnología nos dio la primera lección. Al usar una TV como monitor, la señal de vídeo escaló la interfaz de instalación a un tamaño tan ridículamente pequeño que era casi imposible leer lo que ponía en pantalla.
+
+Como no veíamos bien los campos de texto, cometimos errores al escribir los nombres de usuario y las contraseñas de red. En lugar de seguir adelante con un sistema "sucio", decidimos ser perfeccionistas: reinstalamos el sistema operativo dos veces desde cero hasta que estuvimos seguros de que cada carácter introducido era el correcto. No queríamos que un error tipográfico en la base nos diera problemas de permisos más adelante.
+
+### Configuración del Espejo (RAID 1)
+
+Una vez el sistema estuvo estable, configuramos el QNAP en RAID 1. En lugar de usar los discos por separado para tener 8 TB, preferimos la seguridad. El RAID 1 crea un espejo exacto; si el disco principal falla físicamente, el segundo disco asume el control sin pérdida de información ni tiempo de inactividad. Es nuestra garantía de que el trabajo de todo un año no se pierda por un fallo de hardware.
