@@ -1,1 +1,23 @@
 
+# Especificaciones del hardware y software
+  ## Nodo de computo
+  MSI Cubi NUC 1M-226BES | Barebone 
+  ## Nodo de almacenamiento
+  QNAP TR-002 Caja RAID USB-C 3.1 / Unidad de expansión - 2 bahías SATA de 2,5"/3,5"
+  ## VPN
+  Tailscale + Samba
+# Almacenamiento y Copia de seguridad
+1- Apertura y conexión de los dispositivos y sus perifericos
+        Comprobamos que todo estaba en perfectas condiciones y no había ningún inconveniente con el cableado o conexión de los puertos, posteriormente se siguió este orden para la instalación
+        1. Periféricos: Ratón inalámbrico y teclado (para poder controlar la instalación)
+        2. Monitor: Conexión a TV (aquí vino el primer problema)
+        3. USB (Ventoy): Con el instalador de Ubuntu
+        4. NUC: El cerebro del sistema
+        5. QNAP: El almacenamiento masivo
+        6. Router personal: Para la salida a internet y configuración de IP local
+    2- Descarga e instalación del sistema operativo y software
+        Descargamos la versión Ubuntu 24.04.4 LTS mediante Ventoy en un usb básico, donde tras conectarlo tuvimos el primer problema, la pantalla de configuración se veía en un tamaño extremadamente pequeño en la pantalla de TV por lo que al no poder ver los datos que introduciamos nos equivocamos hasta 2 veces, donde tuvimos que reinstalar el sistema operativo
+    3- Configuración del sistema operativo
+        QNAP permite asignar un disco duro en diferentes tipos de RAID, en este caso lo pusimos en RAID, esta crea un espejo del primer disco para recuperar toda la información de golpe por si el disco principal se daña o cometemos algún error importante
+    4- Tailscale y Samba 
+        Decidimos instalar Tailscale por su gran ventaja, debido a que nos ofrecia una manera estable, rapida y facil de conectarnos al servidor mediante el comando SSH, lo malo es que nos obligaba a usar Samba, la cual a pesar de su vulnerabilidad esta ya ha sido parcheada
