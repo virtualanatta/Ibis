@@ -1,23 +1,38 @@
-
 # Especificaciones del hardware y software
-  ## Nodo de computo
-  MSI Cubi NUC 1M-226BES | Barebone 
-  ## Nodo de almacenamiento
-  QNAP TR-002 Caja RAID USB-C 3.1 / Unidad de expansión - 2 bahías SATA de 2,5"/3,5"
-  ## VPN
-  Tailscale + Samba
+
+## Nodo de cómputo
+**MSI Cubi NUC 1M-226BES | Barebone**: Este equipo fue seleccionado por su excelente equilibrio entre consumo energético contenido y potencia de procesamiento. Al basarse en una arquitectura **x86**, nos garantiza una compatibilidad total con el ecosistema de contenedores Docker profesionales, evitando los problemas de dependencias y librerías que suelen aparecer en arquitecturas ARM (como las Raspberry Pi) en entornos de producción.
+
+## Nodo de almacenamiento
+**QNAP TR-002 Caja RAID USB-C 3.1**: Se trata de una unidad de expansión de 2 bahías SATA de 2,5"/3,5". La característica técnica fundamental es que la gestión del **RAID se realiza por hardware**. Esto es vital, ya que libera de carga de trabajo al procesador del NUC, permitiendo que este dedique todos sus recursos exclusivamente a correr los microservicios y la lógica de negocio sin latencias en el I/O de disco.
+
+## VPN y Red Privada
+**Tailscale + Samba**: Para la conectividad, implementamos un modelo de **"Exposición Cero"**. Utilizamos Tailscale para crear un túnel cifrado basado en el protocolo **WireGuard**, lo que nos permite saltarnos los firewalls restrictivos (como los de una escuela o universidad) sin necesidad de abrir un solo puerto en el router personal. Complementamos esto con Samba para mapear los 4 TB de almacenamiento directamente en nuestro equipo de trabajo como una unidad de red local segura.
+
 # Almacenamiento y Copia de seguridad
-1- Apertura y conexión de los dispositivos y sus perifericos
-        Comprobamos que todo estaba en perfectas condiciones y no había ningún inconveniente con el cableado o conexión de los puertos, posteriormente se siguió este orden para la instalación
-        1. Periféricos: Ratón inalámbrico y teclado (para poder controlar la instalación)
-        2. Monitor: Conexión a TV (aquí vino el primer problema)
-        3. USB (Ventoy): Con el instalador de Ubuntu
-        4. NUC: El cerebro del sistema
-        5. QNAP: El almacenamiento masivo
-        6. Router personal: Para la salida a internet y configuración de IP local
-    2- Descarga e instalación del sistema operativo y software
-        Descargamos la versión Ubuntu 24.04.4 LTS mediante Ventoy en un usb básico, donde tras conectarlo tuvimos el primer problema, la pantalla de configuración se veía en un tamaño extremadamente pequeño en la pantalla de TV por lo que al no poder ver los datos que introduciamos nos equivocamos hasta 2 veces, donde tuvimos que reinstalar el sistema operativo
-    3- Configuración del sistema operativo
-        QNAP permite asignar un disco duro en diferentes tipos de RAID, en este caso lo pusimos en RAID, esta crea un espejo del primer disco para recuperar toda la información de golpe por si el disco principal se daña o cometemos algún error importante
-    4- Tailscale y Samba 
-        Decidimos instalar Tailscale por su gran ventaja, debido a que nos ofrecia una manera estable, rapida y facil de conectarnos al servidor mediante el comando SSH, lo malo es que nos obligaba a usar Samba, la cual a pesar de su vulnerabilidad esta ya ha sido parcheada
+
+### 1. Apertura y conexión de los dispositivos y sus periféricos
+Antes de proceder al encendido inicial, realizamos una inspección física detallada para asegurar que el cableado y los puertos no presentaran inconvenientes. Establecimos un orden de conexión estratégico para asegurar que la BIOS detectara todos los componentes correctamente:
+
+1. **Periféricos de control**: Ratón inalámbrico y teclado (necesarios para la interfaz de configuración inicial).
+2. **Salida de vídeo**: Conexión a TV (en este punto surgió el primer conflicto de resolución).
+3. **Unidad de arranque**: USB configurado con **Ventoy** conteniendo la imagen de Ubuntu.
+4. **Cómputo**: Encendido del MSI Cubi NUC.
+5. **Almacenamiento**: Activación de la unidad QNAP.
+6. **Red**: Conexión al Router personal para la salida a internet y asignación de IP estática en la LAN.
+
+### 2. Descarga e instalación del sistema operativo y software
+Se procedió a la instalación de **Ubuntu 24.04.4 LTS**. Durante este proceso sufrimos un percance técnico relevante: la señal de vídeo enviada a la TV escaló la interfaz de configuración a un tamaño tan diminuto que resultaba prácticamente ilegible.
+
+* **Impacto y resolución**: Debido a la falta de visibilidad, cometimos errores tipográficos al introducir los datos de usuario y red. Esto nos obligó a realizar la **reinstalación completa del sistema operativo en dos ocasiones** adicionales. Fue una decisión necesaria para garantizar que las credenciales de root y la configuración base fueran perfectas, evitando arrastrar errores de configuración a las fases críticas de producción.
+
+### 3. Configuración del sistema de archivos y RAID
+El DAS QNAP fue configurado bajo un esquema de **RAID 1 (Mirroring)**.
+
+* **Justificación técnica**: Priorizamos la integridad de los datos sobre la capacidad total. El RAID 1 crea un espejo exacto en ambos discos; si una unidad falla físicamente, la segunda asume el control total sin pérdida de información ni tiempo de inactividad. Es una configuración esencial para un servidor que debe ser robusto y estar disponible 24/7.
+* **Persistencia**: Para asegurar que el montaje del disco sea infalible tras cada reinicio, configuramos el archivo `/etc/fstab` utilizando el **UUID** del disco. Esto evita que el sistema se bloquee o falle si los identificadores de los puertos USB cambian dinámicamente.
+
+### 4. Tailscale y Samba: Conectividad y Acceso
+La implementación de **Tailscale** ha sido la base del éxito en la conectividad del proyecto. Nos proporciona una IP privada estable y segura, permitiendo la administración total del servidor mediante **SSH** desde cualquier red externa de forma totalmente transparente.
+
+* **Samba y Seguridad**: Configuramos Samba para la gestión de los 4 TB de datos. Para mitigar vulnerabilidades históricas de este protocolo, forzamos el uso de **SMB3** con parches actualizados y cifrado de datos. De esta forma, el almacenamiento masivo aparece como una unidad Z: en nuestro portátil de trabajo, pero el acceso está estrictamente limitado a cuando el túnel de la VPN está activo, añadiendo una capa de seguridad perimetral robusta.
