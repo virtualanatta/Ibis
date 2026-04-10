@@ -1,37 +1,63 @@
-# Implementación del Servidor de Correo: Mailcow
+# Servidor de Correo: Mailcow (dockerized)
 
-En un proyecto de la envergadura de Ibis, la comunicación no puede depender de servicios externos como Gmail o Outlook. Para profesionalizar el campus y garantizar la soberanía total de los datos, decidimos integrar **Mailcow: dockerized**. Se trata de una suite de correo completa que incluye todo lo necesario (Postfix, Dovecot, SOGo, Rspamd) corriendo bajo contenedores Docker.
+Para que el campus Ibis sea un entorno 100% autónomo, no podíamos depender de Gmail o Outlook. Instalamos **Mailcow**, que es una suite de correo completa (Postfix, Dovecot, SOGo, etc.) que corre totalmente en contenedores. La idea es gestionar nuestras propias cuentas `@crimsa.xxx` y tener el control total de los mensajes y la privacidad de los alumnos.
 
-## Justificación: ¿Por qué Mailcow?
+## 1. Instalación y Despliegue
 
-La razón principal de elegir Mailcow es su **arquitectura modular**. Al estar totalmente "dockerizado", encaja perfectamente con el resto de nuestra infraestructura en el NUC. Nos permite gestionar nuestras propias cuentas de correo `@Ibis.xxx`, lo que da una imagen de sistema autónomo y seguro. Además, incluye herramientas de seguridad avanzadas como filtrado de spam y antivirus (ClamAV) integradas de serie, algo vital si vamos a manejar información de alumnos y profesores.
-
-## Despliegue e Instalación
-
-La instalación se realizó siguiendo la metodología de "Infraestructura como Código". Clonamos el repositorio oficial y generamos la configuración base:
+Mailcow no se instala como un contenedor suelto, sino como un ecosistema de casi 20 contenedores trabajando juntos. El proceso de instalación en el NUC fue el siguiente:
 
 ```bash
-# Clonado del repositorio en nuestro directorio de proyectos
+# Instalamos dependencias necesarias
+sudo apt install git curl docker-compose-plugin
+
+# Clonamos el repositorio oficial en nuestra carpeta de servicios
+cd /mnt/TFG_CRIMSA/01_PROYECTO/
 git clone https://github.com/mailcow/mailcow-dockerized
 cd mailcow-dockerized
 
-# Generación del archivo de configuración
+# Generamos el archivo de configuración inicial
 ./generate_config.sh
 ```
 
-Durante la generación, definimos el **FQDN** (nombre de dominio) del servidor. Aquí es donde la red de Ibis se vuelve compleja, ya que el servidor de correo necesita ser visible para otros servidores de internet para poder recibir mensajes, chocando con nuestra política de "Exposición Cero" de Tailscale.
+Durante la generación del `mailcow.conf`, definimos el nombre del servidor (FQDN) como `mail.100.107.56.81.nip.io` y seleccionamos la zona horaria de Madrid.
 
-## El reto de la persistencia en el DAS
+## 2. Configuración de Persistencia en el DAS
 
-Mailcow es un servicio que genera mucha escritura en disco (logs, bases de datos de correo, archivos adjuntos). Por ello, no podíamos dejar que los datos se guardaran en el SSD interno del NUC.
+Mailcow genera muchísimos datos (correos, adjuntos, índices de búsqueda, bases de datos). Por defecto, Docker guarda esto en el SSD interno, pero para aprovechar los 4 TB del DAS y el RAID 1, cambiamos las rutas de los volúmenes en el archivo `docker-compose.yml` de Mailcow.
 
-Configuramos los volúmenes de Docker para que apunten directamente a nuestra estructura en el RAID 1 del DAS. Esto asegura que, si el contenedor de correo se corrompe o necesitamos reinstalar el sistema operativo, todos los emails de los usuarios sigan a salvo en los discos físicos de 4 TB.
+Rutas críticas en el RAID 1:
 
-## Estado actual y "Muros" técnicos
+- **Buzones de correo (vmail):** `/mnt/TFG_CRIMSA/02_DATOS/mailcow/vmail`
+- **Base de datos (MySQL):** `/mnt/TFG_CRIMSA/02_DATOS/mailcow/mysql`
+- **Configuración de Redis:** `/mnt/TFG_CRIMSA/02_DATOS/mailcow/redis`
 
-Siendo sinceros y pragmáticos, Mailcow es el servicio más difícil de configurar de todo el stack. Actualmente, el software está instalado y los contenedores levantan correctamente, pero nos enfrentamos a dos problemas reales que suelen ocurrir en proyectos de autogestión:
+## 3. Acceso y Administración
 
-- **Bloqueo del Puerto 25:** La mayoría de los operadores de internet (ISP) bloquean el puerto 25 por defecto para evitar el spam. Esto impide que el servidor envíe correos directamente a otros servidores como Gmail.
-- **Configuración DNS (MX, SPF, DKIM):** Para que un correo no llegue a la carpeta de SPAM, hay que configurar registros DNS muy específicos. Al estar operando principalmente bajo una IP de Tailscale y dominios nip.io, la validación de identidad del servidor de correo es el siguiente gran reto técnico a resolver.
+Una vez que levantamos el stack con `docker compose up -d`, el sistema tarda unos minutos en inicializar todos los servicios (especialmente el antivirus ClamAV).
 
-Aun así, la instalación base funciona internamente. Podemos crear buzones y acceder al panel de administración de SOGo, lo que demuestra que la orquestación entre los más de 10 contenedores que forman Mailcow es estable dentro de nuestra red Docker.
+- **URL de acceso al panel:** `http://mail.100.107.56.81.nip.io`
+- **Usuario por defecto:** `admin`
+- **Contraseña por defecto:** `moohoo` (Cambiada inmediatamente a `xxxx`).
+- **Interfaz de correo (Webmail):** Usamos **SOGo**, que viene integrado y permite gestionar no solo el correo, sino también calendarios y contactos de los profesores del campus.
+
+## 4. Problemas encontrados y "muros" técnicos
+
+### El bloqueo del Puerto 25 (El gran problema)
+
+Al intentar enviar correos desde el NUC, vimos que no salían.
+
+- **Causa:** La mayoría de operadoras de internet bloquean el puerto 25 en conexiones domésticas para evitar el SPAM. Sin este puerto abierto, Mailcow no puede hablar con otros servidores como Gmail.
+- **Solución actual:** El servidor funciona perfectamente de forma interna (entre cuentas del campus), pero para enviar correos al exterior estamos configurando un "SMTP Relay", que es básicamente pedirle a otro servidor que envíe el correo por nosotros de forma segura.
+
+### Consumo excesivo de RAM
+
+Al principio, el NUC empezó a ir lento y algunos contenedores de Mailcow se cerraban solos.
+
+- **Causa:** El contenedor `clamd-mailcow` (el antivirus) consume por sí solo casi 2 GB de RAM.
+- **Solución:** Tuvimos que editar el archivo `mailcow.conf` y desactivar el antivirus temporalmente (`SKIP_CLAMD=y`) mientras ajustamos los límites de memoria de Docker, priorizando que la base de datos Danet y el Chat tengan recursos suficientes.
+
+### El lío de los registros DNS (SPF, DKIM y DMARC)
+
+Incluso si el correo sale, Gmail lo detecta como peligroso y lo borra.
+
+- **Solución:** Tuvimos que configurar manualmente los registros de seguridad en el panel de Mailcow. El propio software te genera las claves "DKIM" (una firma digital), pero al usar la IP de Tailscale y dominios nip.io, la reputación del servidor es baja. Es un reto técnico que estamos puliendo para que el tribunal vea un sistema de correo profesional.
