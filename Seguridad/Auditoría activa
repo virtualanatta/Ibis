@@ -1,1 +1,89 @@
+# Auditoría Activa y Seguridad Reactiva
 
+En un servidor que está abierto a una red (aunque sea privada por Tailscale), no basta con poner contraseñas. Necesitamos saber qué pasa en el sistema en tiempo real. Para CRIMSA, diseñé un sistema de **Auditoría Activa** que me avisa de cualquier movimiento sospechoso, especialmente si alguien intenta entrar por SSH al corazón del servidor.
+
+## 1. El Bot Guardián: Sentinel (Telegram)
+
+El primer nivel de auditoría es un bot de Telegram que he programado en Bash. Su función es sencilla pero vital: cada vez que alguien inicia una sesión SSH en el Intel NUC, el servidor me envía un mensaje instantáneo al móvil con los detalles de la conexión.
+
+### Instalación y Configuración del Bot
+
+Para que esto funcione, primero tuve que crear un bot en Telegram usando **BotFather** para obtener el `API_TOKEN`. Después, saqué mi `CHAT_ID` para asegurar que los mensajes solo me lleguen a mí y no a un grupo público.
+
+Pasos en el servidor:
+
+1. Creamos el script en una ruta segura del sistema.
+2. Le damos permisos de ejecución: `sudo chmod +x /usr/local/bin/notificar_ssh.sh`.
+3. Lo integramos en el sistema para que se dispare automáticamente.
+
+### Archivos y Lógica del Script
+
+El archivo principal es `notificar_ssh.sh`. No es un programa complejo, pero usa variables de entorno del sistema para capturar quién está entrando.
+
+Contenido del script (simplificado):
+
+```bash
+#!/bin/bash
+
+# Variables de Telegram (Ocultas por seguridad)
+TOKEN="xxxx"
+ID="xxxx"
+URL="https://api.telegram.org/bot$TOKEN/sendMessage"
+
+# Captura de datos de la sesión
+USER_LOGIN=$(whoami)
+IP_REMOTA=$SSH_CLIENT
+FECHA=$(date '+%D %H:%M:%S')
+
+# Mensaje para enviar
+MENSAJE="🚨 Alerta de Acceso SSH en CRIMSA 🚨
+Usuario: $USER_LOGIN
+Desde IP: $IP_REMOTA
+Fecha: $FECHA"
+
+# Envío mediante CURL
+curl -s -X POST $URL -d chat_id=$ID -d text="$MENSAJE" > /dev/null
+```
+
+Para que este script salte siempre, lo añadimos al final del archivo `/etc/profile`. Así, en cuanto el usuario pone su contraseña y entra, el script se ejecuta y me llega la notificación al móvil antes de que el intruso pueda siquiera escribir un comando.
+
+## 2. Auditoría Inteligente: La idea del Bot con IA
+
+Aunque ahora mismo el sistema es reactivo (me avisa cuando ya han entrado), la idea de futuro para Ibis es integrar la IA local (Ollama + Phi-3) en la auditoría.
+
+**El concepto:** La idea es usar n8n (nuestra herramienta de automatización) para que lea los archivos de logs de Nginx y de acceso al sistema cada hora. Ese "chorro" de texto se le pasaría al modelo Phi-3 para que lo analice y genere un resumen: "Hoy ha habido 20 intentos de acceso fallidos desde esta IP" o "El servidor Nextcloud está recibiendo demasiadas peticiones, podría ser un ataque". Sería pasar de una notificación simple a tener un "analista de seguridad" virtual que me resuma el estado del servidor.
+
+## 3. Inmutabilidad de Logs: `chattr +a`
+
+Para que la auditoría sea real, los logs no deben poder borrarse. Si un atacante entra, lo primero que hará será borrar el archivo `auth.log` para no dejar huella.
+
+Para evitarlo, configuré el atributo de inmutabilidad en las carpetas de logs dentro del DAS de 4 TB:
+
+```bash
+sudo chattr +a /mnt/TFG_CRIMSA/04_MONITORIZACION/logs/access.log
+```
+
+El flag `+a` significa **Append Only**. Es decir, el sistema puede añadir líneas nuevas al log (escribir lo que pasa), pero nadie (ni siquiera el root sin quitar el flag antes) puede borrar o editar lo que ya está escrito. Es la mejor forma de asegurar que las pruebas de acceso sean legales y verídicas.
+
+## 4. Problemas encontrados y "Sustos" reales
+
+### El susto de los inicios de sesión automáticos
+
+Al principio, el bot de Telegram me freía a mensajes cada 5 minutos.
+
+- **Causa:** Tenía configurados scripts internos que hacían peticiones por SSH o SFTP para backups, y el bot me avisaba de cada uno de ellos como si fuera un ataque.
+- **Solución:** Tuve que añadir un filtro en el script de Bash para que ignore las conexiones que vienen de la IP local (`127.0.0.1`) o de mi propia IP fija de Tailscale, dejando las alertas solo para IPs desconocidas.
+
+### El fallo de Curl y la Red
+
+A veces entraba al servidor y no me llegaba el mensaje.
+
+- **Causa:** Si la red tardaba un segundo más en levantar la interfaz de Tailscale, el comando `curl` fallaba porque no tenía salida a internet en el momento exacto del login.
+- **Solución:** Añadí un pequeño `sleep 2` al inicio del script y un reintento en el comando `curl`. Con esto me aseguro de que el servidor tiene línea antes de intentar avisarme.
+
+### El bot "mudo" por falta de permisos
+
+Hubo una semana que dejé de recibir alertas sin tocar nada.
+
+- **Causa:** Al actualizar Ubuntu, los permisos de `/etc/profile` cambiaron y el script ya no tenía permiso para ejecutarse como usuario estándar.
+- **Solución:** Moví la llamada del script a `/etc/pam.d/sshd` usando el módulo `pam_exec.so`. Es un método más profesional y difícil de saltar por un atacante, ya que se ejecuta a nivel de sistema de autenticación, no de perfil de usuario.
