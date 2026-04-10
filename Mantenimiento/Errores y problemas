@@ -1,1 +1,38 @@
+Diario de Errores y Desafíos Técnicos: La Realidad Detrás del Servidor
 
+Montar una infraestructura de este calibre no es un camino lineal; es, en gran medida, una sucesión de fallos que obligan a entender cómo funciona realmente cada capa del sistema. A menudo se piensa que con un docker compose up todo está listo, pero la realidad es que nos hemos enfrentado a muros técnicos que casi bloquean el avance del proyecto. Aquí detallo las complicaciones más significativas que surgieron durante el despliegue de Ibis.
+1. El Caos de la Primera Instalación
+
+El primer gran golpe de realidad llegó antes de tener siquiera el sistema operativo instalado. Al conectar el Intel NUC a una televisión para usarla como monitor, nos encontramos con un problema de escalado de resolución. La interfaz de instalación de Ubuntu se renderizaba a un tamaño tan diminuto que leer las opciones era un ejercicio de fe.
+
+Esto no fue solo una molestia visual; provocó que introdujéramos erróneamente las credenciales de red y de usuario en los campos de texto. Al darnos cuenta de que la base del sistema estaba "sucia" por estos errores tipográficos, tomamos la decisión pragmática de reinstalarlo todo desde cero hasta dos veces más. Aprendimos que en administración de sistemas, si la base está mal, todo lo que construyas encima acabará cayendo.
+2. Los "Guardianes Silenciosos" del Kernel: AppArmor y Permisos
+
+Uno de los problemas que más tiempo nos robó fue el comportamiento de AppArmor. Teníamos las bases de datos configuradas para guardar la información en el disco externo de 4 TB. Aplicamos permisos totales (chmod 777) para descartar problemas de acceso, pero el servicio se negaba a arrancar dando un error de "Permission Denied".
+
+Fue frustrante porque, sobre el papel, los permisos estaban bien. Sin embargo, descubrimos que AppArmor actúa como un vigilante a nivel de núcleo que confina los procesos a sus rutas por defecto (como /var/lib/mysql). Al mover los datos al DAS, AppArmor bloqueaba la escritura sin avisar de forma clara. Tuvimos que bucear en los logs del sistema (dmesg) para entender que debíamos modificar los perfiles de seguridad internos del sistema operativo para "autorizar" al NUC a usar nuestro almacenamiento masivo.
+3. El Desastre del Bloqueo por Firewall (UFW)
+
+La seguridad es vital, pero un error de configuración puede dejarte fuera de tu propio servidor. Al configurar el firewall UFW por SSH, cometimos el error de activar el bloqueo total de entrada sin haber definido correctamente la excepción para la interfaz de Tailscale.
+
+En el momento en que ejecutamos sudo ufw enable, la conexión se cortó instantáneamente. Perdimos el acceso remoto y el servidor quedó "blindado" incluso para nosotros. Esto nos obligó a volver al modo físico: conectar de nuevo monitor y teclado al NUC para entrar de forma local y arreglar las reglas de red. Fue una lección de humildad: nunca se activa un firewall en remoto sin una vía de rescate probada.
+4. El Infierno de los UID en Docker
+
+Docker promete aislamiento, pero ese aislamiento trae problemas de propiedad de archivos. Servicios como Mattermost y Nextcloud usan usuarios internos con identificadores específicos (UID 2000 y UID 33, respectivamente).
+
+El problema surgió al mapear las carpetas del DAS. Los archivos aparecían como propiedad de mi usuario en el host, pero los procesos dentro del contenedor no tenían permiso para escribir en ellos. Esto causaba fallos aleatorios: el chat funcionaba pero no dejaba subir fotos, o la nube no permitía crear carpetas. La solución no fue dar permisos a todo el mundo (lo cual es un riesgo de seguridad), sino entender la estructura de usuarios de Linux y forzar al DAS a que cada carpeta perteneciera exactamente al UID que el contenedor necesitaba.
+5. El Fracaso Inicial de los Backups Corruptos
+
+Confiamos en que copiar los archivos de las bases de datos mientras el servidor estaba encendido sería suficiente. Sin embargo, al hacer una prueba de restauración, nos encontramos con que las bases de datos de Danet y Sphynxchat estaban corruptas.
+
+El motivo es que las bases de datos escriben constantemente en archivos temporales y memorias caché. Si copias los archivos "en caliente", te llevas una versión inconsistente de la información. Esto nos obligó a rediseñar todo el sistema de backups: ahora, antes de copiar nada, ejecutamos un comando interno que "congela" la base de datos y saca una exportación limpia (dump). Aprendimos que un backup que no ha sido probado en una restauración no es un backup, es solo espacio ocupado en el disco.
+6. Los Límites de la Red Doméstica y Mailcow
+
+Intentar montar un servidor de correo profesional como Mailcow en una red doméstica nos puso delante de limitaciones físicas que no podíamos controlar. El bloqueo del puerto 25 por parte del proveedor de internet (ISP) fue un muro infranqueable al principio. Mailcow es un ecosistema de más de 15 contenedores, y su consumo de RAM (especialmente por el antivirus ClamAV) estuvo a punto de colapsar el NUC.
+
+Tuvimos que tomar decisiones drásticas: desactivar módulos pesados que no eran críticos para el TFG y pelear con configuraciones DNS complejas (registros MX, SPF, DKIM) que, en una red bajo una VPN como Tailscale, se comportan de forma muy diferente a un servidor con IP pública estática.
+7. WebSockets: El Chat que no Respondía
+
+Finalmente, el despliegue del chat nos dio un último dolor de cabeza con los WebSockets. A través del Proxy, la interfaz cargaba pero los mensajes no se enviaban en tiempo real. Fue una búsqueda exhaustiva hasta que entendimos que el tráfico de chat no es como el de una web normal; requiere una conexión persistente que el Proxy (Nginx) cortaba por defecto. Fue necesario entrar en las tripas de la configuración del Proxy para habilitar manualmente el soporte de WebSockets y ajustar las cabeceras de red para que el chat fluyera sin cortes.
+
+Cada uno de estos fallos ha sido una lección de ingeniería. Lo que hoy se ve como un sistema fluido y estable es en realidad el resultado de haber roto y arreglado el servidor decenas de veces.
