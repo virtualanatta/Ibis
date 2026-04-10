@@ -1,1 +1,77 @@
+Gestión de Tráfico y Seguridad: Nginx Proxy Manager (NPM)
 
+Nginx Proxy Manager es el componente más crítico de la red de Ibis. Actúa como un Proxy Inverso, lo que significa que es el único "portero" que da la cara a la red Tailscale. Su función es recibir las peticiones por los puertos estándar y repartirlas internamente a los contenedores de Docker sin que el usuario tenga que poner el puerto manualmente en la URL.
+1. Instalación y Despliegue con Docker
+
+Para que el proxy sea el primero en levantar y gestionar el tráfico, lo integramos en nuestro docker-compose.yml maestro. No usamos una instalación limpia de Nginx porque NPM nos da una interfaz web para gestionar todo visualmente, lo que reduce errores al editar archivos .conf.
+
+Comando de despliegue:
+Bash
+
+# Dentro de la carpeta /03_Servicios/
+sudo docker compose up -d nginx-proxy
+
+Configuración del archivo de orquestación:
+YAML
+
+nginx-proxy:
+  image: 'jc21/nginx-proxy-manager:latest'
+  container_name: sphynxproxy
+  restart: unless-stopped
+  ports:
+    - '80:80'   # Tráfico HTTP
+    - '81:81'   # Panel de Administración
+    - '443:443' # Tráfico HTTPS
+  volumes:
+    - /mnt/TFG_CRIMSA/02_DATOS/nginx_proxy/data:/data
+    - /mnt/TFG_CRIMSA/02_DATOS/nginx_proxy/letsencrypt:/etc/letsencrypt
+  networks:
+    - crisma_network
+
+2. Configuración de Persistencia en el DAS
+
+Como NPM guarda todas las rutas de los subdominios y las configuraciones de seguridad, no podíamos dejar estos datos en el SSD interno. Mapeamos las carpetas directamente al RAID 1:
+
+    Ruta de Configuración: /mnt/TFG_CRIMSA/02_DATOS/nginx_proxy/data (Aquí vive la base de datos SQLite con todos nuestros hosts).
+
+    Ruta de Certificados: /mnt/TFG_CRIMSA/02_DATOS/nginx_proxy/letsencrypt (Donde se guardarían los certificados SSL si abriéramos el servidor a internet).
+
+3. Configuración de Hosts y Acceso
+
+Una vez levantado el contenedor, el acceso al panel de control se hace desde el portátil a través de Tailscale:
+
+    URL de Administración: http://100.107.56.81:81
+
+    Usuario inicial: admin@example.com
+
+    Contraseña inicial: changeme (Se cambia obligatoriamente tras el primer login).
+
+Uso de nip.io para Subdominios
+
+Para que el sistema sea profesional, configuramos "Proxy Hosts" usando el servicio de DNS dinámico nip.io. Esto nos permite simular dominios reales sin pagar por uno. En el panel de NPM, creamos estas reglas:
+Subdominio	Forward IP (Interna Docker)	Puerto
+campus.100.107.56.81.nip.io	crisma_front	8081
+sphynxchat.100.107.56.81.nip.io	sphynxchat	8065
+cloud.100.107.56.81.nip.io	nextcloud	80
+4. Problemas Encontrados y Soluciones Reales
+El fallo de los WebSockets (Mattermost)
+
+Al principio, el chat de Mattermost cargaba la interfaz pero no enviaba mensajes. Esto pasaba porque Nginx cortaba las conexiones persistentes.
+
+    Solución: Dentro de la configuración del host en NPM, hay que activar el interruptor "Websockets Support". Esto permite que el tráfico bidireccional fluya y los mensajes aparezcan al instante.
+
+El límite de subida en Nextcloud
+
+Intentamos subir un archivo de 100MB a la nube y el proxy daba un error "413 Request Entity Too Large".
+
+    Solución: Tuvimos que añadir una línea de configuración avanzada en el bloque de Nginx dentro de NPM:
+    Nginx
+
+    client_max_body_size 512M;
+
+Esto le dice al proxy que deje pasar archivos de hasta 512MB antes de cortar la conexión.
+Error de "Confianza" en Nextcloud
+
+Al entrar por el dominio nip.io, Nextcloud daba un error de "Trusted Domains".
+
+    Solución: Tuvimos que editar el archivo config.php en /mnt/TFG_CRIMSA/02_DATOS/nextcloud/config/ y añadir 100.107.56.81.nip.io a la lista de dominios permitidos, además de configurar el trusted_proxies con la IP interna del contenedor del proxy.
