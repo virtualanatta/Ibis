@@ -1,1 +1,49 @@
+# Almacenamiento en la Nube: Nextcloud
 
+Para que el campus Ibis sea una herramienta completa, no bastaba con tener una base de datos y un chat; necesitábamos un lugar donde alumnos y profesores pudieran subir apuntes, entregas y archivos pesados de forma estructurada. En lugar de depender de servicios como Google Drive o Dropbox, donde perdemos la soberanía de los archivos, decidimos desplegar **Nextcloud**. Es nuestra nube privada que corre directamente sobre el NUC y guarda todo en nuestro almacenamiento masivo.
+
+## La infraestructura detrás de la nube
+
+Nextcloud no es un programa ligero; es una suite completa que requiere varios servicios trabajando en paralelo para no volverse lenta. En nuestro stack de Docker, lo hemos separado en tres piezas clave:
+
+- **El Servidor Web (App):** El contenedor que sirve la interfaz y gestiona los archivos.
+- **La Base de Datos:** Usamos una instancia de MariaDB dedicada exclusivamente a Nextcloud para gestionar los metadatos y la estructura de carpetas.
+- **El Sistema de Caché (Redis):** Fundamental para que la navegación por las carpetas sea fluida. Sin Redis, cada vez que un usuario entra a una carpeta con muchos archivos, el servidor tendría que consultar la base de datos una y otra vez, ralentizando la experiencia.
+
+## Despliegue y Orquestación
+
+La instalación se realiza mediante Docker Compose, integrando el servicio en la red `crisma_network`. Esto permite que Nextcloud se comunique con su base de datos de forma interna, sin exponer puertos de datos al host.
+
+Variables de entorno configuradas:
+
+- `MYSQL_DATABASE`: `nextcloud`
+- `MYSQL_USER`: `nextcloud`
+- `MYSQL_PASSWORD`: `xxxx`
+- `NEXTCLOUD_ADMIN_USER`: `admin`
+- `NEXTCLOUD_ADMIN_PASSWORD`: `xxxx`
+- `NEXTCLOUD_TRUSTED_DOMAINS`: `cloud.100.107.56.81.nip.io`
+
+## El reto de la persistencia y los 4 TB
+
+Configurar Nextcloud para que use el DAS fue uno de los pasos más importantes. Por defecto, Nextcloud intenta guardar los archivos dentro del contenedor, lo que llenaría el SSD del NUC en cuestión de minutos. Para evitarlo, mapeamos el volumen de datos directamente a nuestra estructura en el RAID 1.
+
+Mapeo de rutas en el DAS:
+
+- **Directorio de datos:** `/mnt/TFG_CRIMSA/02_DATOS/nextcloud/data:/var/www/html/data`
+- **Configuración:** `/mnt/TFG_CRIMSA/02_DATOS/nextcloud/config:/var/www/html/config`
+
+Al igual que con Mattermost, tuvimos que pelear con los permisos de Linux. Nextcloud espera que el usuario `www-data` (UID 33) sea el dueño de las carpetas. Si el DAS no tiene estos permisos aplicados (`sudo chown -R 33:33 /mnt/TFG_CRIMSA/02_DATOS/nextcloud`), el sistema se bloquea por seguridad y no permite subir ni un solo archivo.
+
+## Ajustes técnicos y el Proxy Inverso
+
+Para que Nextcloud funcione correctamente detrás de Nginx Proxy Manager, no basta con redirigir el puerto `80`. Tuvimos que realizar ajustes manuales en el archivo `config.php` de Nextcloud para que el sistema "confíe" en el proxy.
+
+Uno de los errores más comunes es que la nube intente redirigir a una IP interna o dé errores de seguridad al entrar por el dominio nip.io. Para solucionarlo, configuramos los parámetros `overwrite.cli.url` y `trusted_proxies`. Esto le dice a Nextcloud: "Oye, si alguien entra por esta URL de Tailscale, déjale pasar porque el Proxy ya ha validado que es seguro". Además, activamos el soporte de subidas pesadas en el Proxy, ya que por defecto Nginx limita los archivos a pocos megabytes, lo que impediría a los alumnos subir proyectos grandes de programación.
+
+## Acceso y uso en el Campus
+
+Para entrar a la nube, la ruta es transparente gracias a nuestro sistema de subdominios:
+
+- **URL:** `http://cloud.100.107.56.81.nip.io`
+
+Una vez dentro, hemos configurado cuotas de disco para que ningún usuario pueda "comerse" los 4 TB él solo. El sistema permite compartir enlaces públicos (con contraseña y fecha de caducidad) y sincronizar las carpetas directamente con el portátil mediante el cliente de escritorio de Nextcloud, siempre que la VPN Tailscale esté activa.
