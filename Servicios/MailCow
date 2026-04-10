@@ -1,1 +1,37 @@
+# Implementación del Servidor de Correo: Mailcow
 
+En un proyecto de la envergadura de Ibis, la comunicación no puede depender de servicios externos como Gmail o Outlook. Para profesionalizar el campus y garantizar la soberanía total de los datos, decidimos integrar **Mailcow: dockerized**. Se trata de una suite de correo completa que incluye todo lo necesario (Postfix, Dovecot, SOGo, Rspamd) corriendo bajo contenedores Docker.
+
+## Justificación: ¿Por qué Mailcow?
+
+La razón principal de elegir Mailcow es su **arquitectura modular**. Al estar totalmente "dockerizado", encaja perfectamente con el resto de nuestra infraestructura en el NUC. Nos permite gestionar nuestras propias cuentas de correo `@Ibis.xxx`, lo que da una imagen de sistema autónomo y seguro. Además, incluye herramientas de seguridad avanzadas como filtrado de spam y antivirus (ClamAV) integradas de serie, algo vital si vamos a manejar información de alumnos y profesores.
+
+## Despliegue e Instalación
+
+La instalación se realizó siguiendo la metodología de "Infraestructura como Código". Clonamos el repositorio oficial y generamos la configuración base:
+
+```bash
+# Clonado del repositorio en nuestro directorio de proyectos
+git clone https://github.com/mailcow/mailcow-dockerized
+cd mailcow-dockerized
+
+# Generación del archivo de configuración
+./generate_config.sh
+```
+
+Durante la generación, definimos el **FQDN** (nombre de dominio) del servidor. Aquí es donde la red de Ibis se vuelve compleja, ya que el servidor de correo necesita ser visible para otros servidores de internet para poder recibir mensajes, chocando con nuestra política de "Exposición Cero" de Tailscale.
+
+## El reto de la persistencia en el DAS
+
+Mailcow es un servicio que genera mucha escritura en disco (logs, bases de datos de correo, archivos adjuntos). Por ello, no podíamos dejar que los datos se guardaran en el SSD interno del NUC.
+
+Configuramos los volúmenes de Docker para que apunten directamente a nuestra estructura en el RAID 1 del DAS. Esto asegura que, si el contenedor de correo se corrompe o necesitamos reinstalar el sistema operativo, todos los emails de los usuarios sigan a salvo en los discos físicos de 4 TB.
+
+## Estado actual y "Muros" técnicos
+
+Siendo sinceros y pragmáticos, Mailcow es el servicio más difícil de configurar de todo el stack. Actualmente, el software está instalado y los contenedores levantan correctamente, pero nos enfrentamos a dos problemas reales que suelen ocurrir en proyectos de autogestión:
+
+- **Bloqueo del Puerto 25:** La mayoría de los operadores de internet (ISP) bloquean el puerto 25 por defecto para evitar el spam. Esto impide que el servidor envíe correos directamente a otros servidores como Gmail.
+- **Configuración DNS (MX, SPF, DKIM):** Para que un correo no llegue a la carpeta de SPAM, hay que configurar registros DNS muy específicos. Al estar operando principalmente bajo una IP de Tailscale y dominios nip.io, la validación de identidad del servidor de correo es el siguiente gran reto técnico a resolver.
+
+Aun así, la instalación base funciona internamente. Podemos crear buzones y acceder al panel de administración de SOGo, lo que demuestra que la orquestación entre los más de 10 contenedores que forman Mailcow es estable dentro de nuestra red Docker.
