@@ -1,1 +1,131 @@
+# Manual de Mantenimiento y Guía de Comandos
 
+Mantener un servidor no es solo dejarlo encendido; es asegurar que el software esté parcheado, los discos tengan espacio y los servicios no se degraden con el tiempo. Esta guía centraliza los comandos y procedimientos que utilizo para que CRIMSA siga funcionando de forma óptima sin tener que reinstalar todo ante un fallo menor.
+
+## 1. Mantenimiento del Sistema Operativo (Host)
+
+Antes de tocar Docker, el NUC debe estar al día. Realizo estas actualizaciones una vez por semana para asegurar parches de seguridad del Kernel.
+
+```bash
+# Actualizar los repositorios y el sistema
+sudo apt update && sudo apt upgrade -y
+
+# Limpiar paquetes que ya no son necesarios (huérfanos)
+sudo apt autoremove -y && sudo apt autoclean
+```
+
+> **Nota:** Si se actualiza el Kernel, es obligatorio reiniciar el NUC para aplicar los cambios: `sudo reboot`.
+
+## 2. Gestión de Servicios con Docker
+
+La mayoría de los problemas de CRIMSA se resuelven gestionando los contenedores. Aquí están los comandos esenciales que uso a diario:
+
+### Estado de Salud
+
+```bash
+# Ver qué contenedores están corriendo y sus puertos
+sudo docker ps
+
+# Ver el consumo de CPU y RAM en tiempo real (Vital para no ahogar el NUC)
+sudo docker stats
+```
+
+### Reinicio de Servicios
+
+Si el chat o la nube van lentos, el primer paso es reiniciar el servicio específico sin apagar todo el servidor:
+
+```bash
+# Reiniciar un solo contenedor (ejemplo: Mattermost)
+sudo docker restart sphynxchat
+
+# Levantar cambios tras editar el docker-compose.yml
+sudo docker compose up -d
+```
+
+### Limpieza de Imágenes
+
+Con el tiempo, las actualizaciones de Docker dejan imágenes antiguas "colgadas" que ocupan espacio en el SSD.
+
+```bash
+# Borra imágenes, redes y contenedores huérfanos
+sudo docker system prune -a
+```
+
+## 3. Monitorización del Almacenamiento (DAS)
+
+Dado que gestionamos 4 TB en RAID 1, es crítico vigilar que el disco no se desconecte o se llene.
+
+```bash
+# Comprobar que el DAS sigue montado en la ruta correcta
+df -h | grep TFG_CRIMSA
+
+# Verificar la salud de las particiones
+lsblk -f
+```
+
+Si el comando `df -h` no muestra la ruta `/mnt/TFG_CRIMSA`, significa que el disco se ha desmontado. Para forzar el montaje sin reiniciar:
+
+```bash
+sudo mount -a
+```
+
+## 4. Gestión de Backups
+
+Aunque el backup es automático por Crontab (03:00 AM), a veces necesito forzar una copia antes de realizar cambios importantes en la base de datos.
+
+```bash
+# Ejecutar el script de backup manualmente
+sudo bash /mnt/TFG_CRIMSA/01_PROYECTO/scripts/backup_diario.sh
+
+# Verificar que el backup se ha realizado (ver el log)
+tail -f /mnt/TFG_CRIMSA/04_MONITORIZACION/logs/backup.log
+```
+
+## 5. Logs y Auditoría: ¿Qué está pasando?
+
+Si un servicio falla, los logs son la única forma de saber por qué. No busco archivos de texto, le pregunto directamente a Docker:
+
+```bash
+# Ver los últimos errores de la base de datos Danet
+sudo docker logs --tail 50 crisma_db
+
+# Ver en tiempo real quién está entrando por el Proxy
+sudo docker logs -f sphynxproxy
+```
+
+## 6. Resolución de Problemas Rápidos (Troubleshooting)
+
+### El servidor no responde a la URL
+
+1. Comprueba que Tailscale está activo en tu portátil y en el servidor: `tailscale status`.
+2. Verifica que el contenedor del Proxy está vivo: `sudo docker ps | grep proxy`.
+3. Reinicia el proxy si es necesario: `sudo docker restart sphynxproxy`.
+
+### Error de "Permiso Denegado" en archivos
+
+Si tras una actualización los servicios no pueden escribir en el DAS, es probable que los permisos de Linux se hayan movido.
+
+```bash
+# Reaplicar permisos al chat (Mattermost)
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/
+
+# Reaplicar permisos a la nube (Nextcloud)
+sudo chown -R 33:33 /mnt/TFG_CRIMSA/02_DATOS/nextcloud/
+```
+
+### Limpiar memoria RAM (Cache de Linux)
+
+Si el servidor va muy pesado por el uso intenso de la IA o Mailcow, podemos liberar la memoria caché que el sistema operativo guarda "por si acaso":
+
+```bash
+# Solo en caso de extrema lentitud
+sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+```
+
+## 7. Apagado Seguro del Nodo
+
+Nunca se debe desenchufar el NUC de la corriente directamente, ya que el DAS podría estar escribiendo en el RAID y corromper los datos.
+
+1. Bajar los servicios: `cd /ruta/docker-compose && sudo docker compose down`
+2. Desmontar discos: `sudo umount /mnt/TFG_CRIMSA`
+3. Apagar sistema: `sudo shutdown -h now`
