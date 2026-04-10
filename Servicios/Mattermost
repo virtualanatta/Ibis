@@ -1,1 +1,86 @@
+# Configuración Detallada de Mattermost (Ibischat)
 
+Mattermost es el servicio más complejo de nuestro stack en cuanto a requisitos de permisos y conectividad en tiempo real. No basta con levantar un contenedor; hay que preparar el sistema de archivos en el DAS y configurar el proxy para que soporte tráfico bidireccional (WebSockets). A continuación, detallo el proceso completo de despliegue.
+
+## 1. Preparación del almacenamiento en el DAS
+
+Mattermost es extremadamente sensible a los permisos de los archivos. Al ejecutarse dentro de Docker, el proceso utiliza internamente el **UID 2000**. Si las carpetas en nuestro disco de 4 TB no tienen estos permisos, el contenedor entrará en un bucle de reinicio (*Boot loop*).
+
+Antes de lanzar nada, ejecutamos la creación de la estructura en la ruta de datos:
+
+```bash
+# Creación de directorios en el RAID 1
+sudo mkdir -p /mnt/TFG_CRIMSA/02_DATOS/mattermost/{config,data,logs,plugins,client,db}
+
+# Asignación de permisos para el usuario de Mattermost (UID 2000)
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/config
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/data
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/logs
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/plugins
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/client
+```
+
+## 2. Orquestación con Docker Compose
+
+Utilizamos la imagen oficial de `mattermost-team-edition`. La configuración se integra en nuestra red interna para que la base de datos PostgreSQL sea invisible desde fuera del NUC.
+
+Configuración clave del servicio:
+
+- **Imagen:** `mattermost/mattermost-team-edition:latest`
+- **Red interna:** `crisma_network`
+- **Dependencia:** `db_mattermost` (PostgreSQL)
+- **Mapeo de volúmenes (Persistencia real):**
+
+```yaml
+volumes:
+  - /mnt/TFG_CRIMSA/02_DATOS/mattermost/config:/mattermost/config:rw
+  - /mnt/TFG_CRIMSA/02_DATOS/mattermost/data:/mattermost/data:rw
+  - /mnt/TFG_CRIMSA/02_DATOS/mattermost/logs:/mattermost/logs:rw
+```
+
+## 3. Configuración del "Punto de Entrada" (Proxy)
+
+Este es el paso donde la mayoría de instalaciones fallan. Mattermost necesita que el tráfico de chat sea instantáneo. Para ello, entramos en el panel de Nginx Proxy Manager (Puerto `81`) y configuramos lo siguiente:
+
+- **Domain Name:** `Ibischat.100.107.56.81.nip.io`
+- **Forward Scheme:** `http`
+- **Forward IP:** `Ibischat` (Nombre del contenedor en la red Docker)
+- **Forward Port:** `8065`
+- **Websockets Support:** `ON` (Imprescindible para que el chat no se desconecte).
+
+## 4. Usuarios y Acceso Inicial
+
+Una vez que el contenedor está "Up", el acceso se realiza exclusivamente a través de la red Tailscale.
+
+- **URL de acceso:** `http://Ibischat.100.107.56.81.nip.io`
+- **Primer arranque:** El primer usuario que se registra en la URL se convierte automáticamente en el System Admin.
+- **Configuración de base de datos:**
+  - User: `mmuser`
+  - Password: `xxxx`
+  - DB Name: `mattermost`
+
+### Gestión de equipos y canales
+
+Para el TFG, hemos estructurado el chat de la siguiente manera:
+
+- **Equipo "Ibis":** El espacio principal de trabajo.
+- **Canales por defecto:**
+  - `Anuncios`: Solo lectura para profesores.
+  - `General`: Chat libre para alumnos.
+  - `Soporte Técnico`: Donde el bot Sentinel vuelca alertas básicas de estado.
+
+## 5. Cómo se entra desde el portátil
+
+Para que tú o cualquier miembro del tribunal vea el chat funcionando:
+
+1. El portátil debe tener Tailscale activo y conectado a tu cuenta.
+2. Se introduce la URL con el dominio nip.io.
+3. El sistema valida que la IP `100.107.56.81` es accesible y el Proxy hace el resto del trabajo de forma interna.
+
+Si en algún momento el chat no carga, el primer comando de diagnóstico que usamos es:
+
+```bash
+docker logs -f Ibischat
+```
+
+Esto nos permite ver si hay un error de conexión con la base de datos o si AppArmor está bloqueando la escritura en `/mnt/TFG_CRIMSA/`.
