@@ -1,63 +1,95 @@
-# Servidor de Correo: Mailcow (dockerized)
+# Memoria Técnica de Implementación: Nodo de Correo Autónomo (Mailcow)
 
-Para que el campus Ibis sea un entorno 100% autónomo, no podíamos depender de Gmail o Outlook. Instalamos **Mailcow**, que es una suite de correo completa (Postfix, Dovecot, SOGo, etc.) que corre totalmente en contenedores. La idea es gestionar nuestras propias cuentas `@crimsa.xxx` y tener el control total de los mensajes y la privacidad de los alumnos.
+## 1. Arquitectura del Sistema
 
-## 1. Instalación y Despliegue
+El servicio de correo se ha desplegado utilizando **Mailcow: dockerized**, una pila de servicios interconectados mediante **Docker Compose**. La elección responde a la necesidad de un entorno de comunicación soberano dentro del Campus Ibis, eliminando la dependencia de proveedores externos (SaaS) [web:16][web:19].
 
-Mailcow no se instala como un contenedor suelto, sino como un ecosistema de casi 20 contenedores trabajando juntos. El proceso de instalación en el NUC fue el siguiente:
+### Componentes Core
+
+- **MTA (Mail Transfer Agent):** Postfix.
+- **MDA (Mail Delivery Agent):** Dovecot (con soporte para IMAP/POP3 y Sieve) [web:19].
+- **Base de Datos:** MariaDB 10.11.
+- **Webmail & Groupware:** SOGo.
+- **Seguridad:** Rspamd (Filtro de spam), ClamAV (Antivirus) y Fail2ban [web:19].
+
+## 2. Despliegue y Persistencia en Almacenamiento Masivo
+
+Dada la disponibilidad de un **DAS de 4 TB (RAID 1)** en el punto de montaje `/mnt/TFG_CRIMSA`, se descartó la instalación en la partición de sistema (`/home`) para evitar el agotamiento de espacio por cuotas de correo [web:17].
+
+### Protocolo de Instalación
 
 ```bash
-# Instalamos dependencias necesarias
-sudo apt install git curl docker-compose-plugin
 
-# Clonamos el repositorio oficial en nuestra carpeta de servicios
-cd /mnt/TFG_CRIMSA/01_PROYECTO/
-git clone https://github.com/mailcow/mailcow-dockerized
-cd mailcow-dockerized
+Definición del entorno de servicios
 
-# Generamos el archivo de configuración inicial
+mkdir -p /mnt/TFG_CRIMSA/services/mailcow
+cd /mnt/TFG_CRIMSA/services/mailcow
+Clonación de la rama master (Stable)
+
+git clone https://github.com/mailcow/mailcow-dockerized .
+Generación del archivo de configuración
+
 ./generate_config.sh
+
+text
+
+## Configuración del Hostname y Puertos (mailcow.conf)
+
+Para evitar colisiones con el Proxy Inverso y otros microservicios (Frontend/Backend) en el NUC, se modificaron los bindings por defecto:
+
+```text
+MAILCOW_HOSTNAME=ibis.local
+HTTP_PORT=8181
+HTTPS_PORT=8444
+HTTP_BIND=0.0.0.0 (vinculación a todas las interfaces, incluyendo la IP de Tailscale 100.107.56.81)
 ```
 
-Durante la generación del `mailcow.conf`, definimos el nombre del servidor (FQDN) como `mail.100.107.56.81.nip.io` y seleccionamos la zona horaria de Madrid.
+## 3. Gestión de Conflictos y Resolución de Errores (Post-Mortem)
 
-## 2. Configuración de Persistencia en el DAS
+### 3.1. Error de Permisos en el Sistema de Archivos (MySQL Errno 13)
 
-Mailcow genera muchísimos datos (correos, adjuntos, índices de búsqueda, bases de datos). Por defecto, Docker guarda esto en el SSD interno, pero para aprovechar los 4 TB del DAS y el RAID 1, cambiamos las rutas de los volúmenes en el archivo `docker-compose.yml` de Mailcow.
+**Descripción:** Al iniciar el contenedor `mysql-mailcow`, el servicio entraba en un bucle de reinicio con el error `Can't read dir of './mailcow/' (errno: 13 "Permission denied")`.
 
-Rutas críticas en el RAID 1:
+**Análisis:** El motor de base de datos MariaDB requiere permisos específicos sobre los volúmenes montados. Al estar en un montaje externo (`/mnt`), las máscaras de usuario del host chocaban con el UID/GID interno del contenedor [web:25][web:22].
 
-- **Buzones de correo (vmail):** `/mnt/TFG_CRIMSA/02_DATOS/mailcow/vmail`
-- **Base de datos (MySQL):** `/mnt/TFG_CRIMSA/02_DATOS/mailcow/mysql`
-- **Configuración de Redis:** `/mnt/TFG_CRIMSA/02_DATOS/mailcow/redis`
+**Solución:**
 
-## 3. Acceso y Administración
+- Eliminación de volúmenes huérfanos: `docker compose down -v`.
+- Normalización de permisos en el host:
 
-Una vez que levantamos el stack con `docker compose up -d`, el sistema tarda unos minutos en inicializar todos los servicios (especialmente el antivirus ClamAV).
+```bash
+sudo chown -R root:root /mnt/TFG_CRIMSA/services/mailcow
+sudo chmod -R 755 /mnt/TFG_CRIMSA/services/mailcow
+```
 
-- **URL de acceso al panel:** `http://mail.100.107.56.81.nip.io`
-- **Usuario por defecto:** `admin`
-- **Contraseña por defecto:** `moohoo` (Cambiada inmediatamente a `xxxx`).
-- **Interfaz de correo (Webmail):** Usamos **SOGo**, que viene integrado y permite gestionar no solo el correo, sino también calendarios y contactos de los profesores del campus.
+### 3.2. Bucle de Redirección HTTP y Fallo de Sesión en SOGo
 
-## 4. Problemas encontrados y "muros" técnicos
+**Descripción:** Al intentar acceder mediante la IP, el servicio SOGo redirigía instantáneamente al panel de administración de Mailcow.
 
-### El bloqueo del Puerto 25 (El gran problema)
+**Análisis:** Mailcow implementa una política de seguridad estricta basada en el nombre de host (FQDN). SOGo valida que la cabecera `Host` del paquete HTTP coincida con el `MAILCOW_HOSTNAME`. Si se accede por IP, las cookies de sesión y los tokens CSRF fallan [web:24][web:21].
 
-Al intentar enviar correos desde el NUC, vimos que no salían.
+**Solución:** Implementación de un DNS local mediante el archivo `hosts` en los clientes Windows:
 
-- **Causa:** La mayoría de operadoras de internet bloquean el puerto 25 en conexiones domésticas para evitar el SPAM. Sin este puerto abierto, Mailcow no puede hablar con otros servidores como Gmail.
-- **Solución actual:** El servidor funciona perfectamente de forma interna (entre cuentas del campus), pero para enviar correos al exterior estamos configurando un "SMTP Relay", que es básicamente pedirle a otro servidor que envíe el correo por nosotros de forma segura.
+- **Ruta:** `C:\Windows\System32\drivers\etc\hosts`
+- **Entrada:** `100.107.56.81 ibis.local mail.ibis.local`
+- **Comando de limpieza:** `ipconfig /flushdns`
 
-### Consumo excesivo de RAM
+## 4. Administración de Recursos y Escalabilidad
 
-Al principio, el NUC empezó a ir lento y algunos contenedores de Mailcow se cerraban solos.
+Aprovechando los 4 TB de almacenamiento, se realizaron ajustes en la lógica de cuotas que el sistema trae por defecto para entornos limitados [web:17].
 
-- **Causa:** El contenedor `clamd-mailcow` (el antivirus) consume por sí solo casi 2 GB de RAM.
-- **Solución:** Tuvimos que editar el archivo `mailcow.conf` y desactivar el antivirus temporalmente (`SKIP_CLAMD=y`) mientras ajustamos los límites de memoria de Docker, priorizando que la base de datos Danet y el Chat tengan recursos suficientes.
+### 4.1. Lógica de Cuotas (Quotas)
 
-### El lío de los registros DNS (SPF, DKIM y DMARC)
+- **Domain Level:** Se detectó el error `Domain quota exceeded`. Se resolvió ampliando el límite del dominio `ibis.local` a "Unlimited" (0 MiB) en el panel de administración, permitiendo que el límite real sea el espacio físico del RAID.
+- **User Level:** Se configuraron buzones de prueba de 50 GB (51200 MiB), demostrando la capacidad de la infraestructura para manejar volúmenes de datos masivos.
 
-Incluso si el correo sale, Gmail lo detecta como peligroso y lo borra.
+### 4.2. Optimización de Mensajería
 
-- **Solución:** Tuvimos que configurar manualmente los registros de seguridad en el panel de Mailcow. El propio software te genera las claves "DKIM" (una firma digital), pero al usar la IP de Tailscale y dominios nip.io, la reputación del servidor es baja. Es un reto técnico que estamos puliendo para que el tribunal vea un sistema de correo profesional.
+Se modificó la configuración de Postfix a través de la UI para soportar adjuntos pesados [web:19]:
+
+- **Límite:** 500 MB por mensaje (superior a los 25 MB estándar de proveedores comerciales).
+- **Justificación:** El uso de red local y almacenamiento dedicado permite el intercambio de activos pesados (imágenes de disco, backups, multimedia) sin latencia externa.
+
+## 5. Conclusión de la Implementación
+
+El nodo de correo se encuentra operativo bajo el dominio interno `ibis.local`. La persistencia de datos está garantizada por el montaje en el DAS, y la seguridad de acceso se ha verificado mediante el **Single Sign-On (SSO)** entre el panel de control y el Webmail SOGo. El sistema es totalmente autónomo y no requiere conexión a internet para el tráfico interno de usuarios [web:16][web:18].
