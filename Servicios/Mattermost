@@ -1,72 +1,116 @@
-# Plataforma de Comunicación: Mattermost (Ibischat)
+# Guía de Implementación Técnica: Plataforma de Comunicación Mattermost
 
-Para que el campus Ibis no dependa de aplicaciones externas como Slack o Discord, donde perdemos el control de los mensajes, instalamos Mattermost (bajo el nombre de **Sphynxchat**). Es un servicio de mensajería profesional que corre totalmente en nuestro servidor, garantizando que todo lo que se habla en el campus se quede en nuestro disco de 4 TB.
+Esta sección documenta el despliegue, configuración y resolución de problemas del servicio de mensajería del Campus Ibis. La plataforma se ha diseñado para ofrecer una alternativa privada a servicios en la nube, centralizando la base de datos de mensajes en el almacenamiento local.
 
-## 1. Instalación y Despliegue con Docker
+## 1. Preparación del Entorno y Estructura de Datos
 
-Mattermost es un servicio "pesado" que necesita su propio motor y una base de datos para funcionar. En nuestro `docker-compose.yml`, lo configuramos para que dependa de una instancia de PostgreSQL, asegurando que ambos estén en la misma red interna para que nadie pueda atacar la base de datos desde fuera.
-
-Configuración del servicio en Docker:
-
-```yaml
-mattermost:
-  image: mattermost/mattermost-team-edition:latest
-  container_name: sphynxchat
-  restart: unless-stopped
-  depends_on:
-    - db_mattermost
-  networks:
-    - crisma_network
-  environment:
-    - MM_SQLSETTINGS_DRIVERNAME=postgres
-    - MM_SQLSETTINGS_DATASOURCE=postgres://mmuser:xxxx@db_mattermost:5432/mattermost?sslmode=disable
-    - MM_SERVICESETTINGS_SITEURL=http://sphynxchat.100.107.56.81.nip.io
-```
-
-## 2. Configuración de Persistencia y el reto del UID 2000
-
-Este fue uno de los puntos más críticos. Mattermost no usa el usuario root por seguridad; usa un usuario interno con el **UID 2000**. Si las carpetas del DAS no tienen exactamente ese dueño, el contenedor falla al arrancar porque no puede escribir los logs o las imágenes que suben los alumnos.
-
-Rutas configuradas en el DAS (RAID 1):
-
-- **Configuración:** `/mnt/TFG_CRIMSA/02_DATOS/mattermost/config`
-- **Datos/Archivos:** `/mnt/TFG_CRIMSA/02_DATOS/mattermost/data`
-- **Logs:** `/mnt/TFG_CRIMSA/02_DATOS/mattermost/logs`
-- **Base de datos:** `/mnt/TFG_CRIMSA/02_DATOS/mattermost/db`
-
-Comandos de permisos aplicados:
+Antes de levantar el servicio, se definió el esquema de persistencia en el DAS (RAID 1) para asegurar que los archivos adjuntos y los logs no saturen el disco de sistema.
 
 ```bash
-# Tuvimos que forzar el propietario al UID 2000 en todo el almacenamiento del chat
-sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/02_DATOS/mattermost/
+# 1. Crear la jerarquía de directorios en el volumen de datos
+cd /mnt/TFG_CRIMSA/services/mattermost
+sudo mkdir -p {config,data,logs,db}
+
+# 2. Definición de la red lógica de Docker para comunicación entre microservicios
+sudo docker network create crisma_network
 ```
 
-## 3. Cómo se entra y configuración inicial
+## 2. Despliegue mediante Docker Compose
 
-El acceso es exclusivo a través del túnel de Tailscale para mantener la privacidad total:
+Se utilizó la imagen oficial de **Mattermost Team Edition**. La configuración se realizó mediante un archivo `docker-compose.yml` diseñado para separar la lógica de aplicación de la persistencia de datos (PostgreSQL).
 
-- **URL de acceso:** `http://sphynxchat.100.107.56.81.nip.io`
-- **Primer Login:** Al entrar por primera vez, el sistema te pide crear una cuenta. El primer usuario en registrarse se convierte automáticamente en el Administrador del Sistema.
-- **Configuración del "Team":** Creamos un equipo llamado "CRIMSA" donde dividimos la comunicación por canales (`General`, `Avisos`, `Tutorías`).
+```yaml
+services:
+  db_mattermost:
+    image: postgres:13-alpine
+    container_name: db_mattermost
+    volumes:
+      - /mnt/TFG_CRIMSA/services/mattermost/db:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=mmuser
+      - POSTGRES_PASSWORD=<DB_PASSWORD>
+      - POSTGRES_DB=mattermost
 
-## 4. Problemas encontrados y soluciones reales
+  mattermost:
+    image: mattermost/mattermost-team-edition:latest
+    container_name: ibischat
+    restart: unless-stopped
+    depends_on:
+      - db_mattermost
+    volumes:
+      - /mnt/TFG_CRIMSA/services/mattermost/config:/mattermost/config
+      - /mnt/TFG_CRIMSA/services/mattermost/data:/mattermost/data
+      - /mnt/TFG_CRIMSA/services/mattermost/logs:/mattermost/logs
+    networks:
+      - crisma_network
+    environment:
+      - MM_SQLSETTINGS_DRIVERNAME=postgres
+      - MM_SQLSETTINGS_DATASOURCE=postgres://mmuser:<DB_PASSWORD>@db_mattermost:5432/mattermost?sslmode=disable
+      - MM_SERVICESETTINGS_SITEURL=http://100.107.56.81:8065
+```
 
-### El problema de los mensajes que no llegan (WebSockets)
+## 3. Resolución del Conflicto de Permisos (UID 2000)
 
-Al principio, el chat cargaba bien pero, al enviar un mensaje, salía un círculo dando vueltas o un error de conexión.
+Tras el primer intento de arranque con `docker compose up -d`, el contenedor fallaba con errores de escritura. Mattermost no corre como root, sino con el usuario interno `mattermost` (UID 2000).
 
-- **Causa:** Mattermost usa WebSockets para que el chat sea instantáneo. El Proxy (Nginx) bloqueaba estas conexiones por defecto.
-- **Solución:** En el panel de Nginx Proxy Manager, entramos en el host de `sphynxchat` y activamos el interruptor **"Websockets Support"**. Sin esto, el chat es prácticamente inútil porque no actualiza en tiempo real.
+**Acción Correctiva:** Se tuvo que forzar la propiedad de todas las carpetas del DAS al UID del contenedor para permitir la creación del archivo `config.json` inicial y la base de datos de logs.
 
-### El bucle de reinicio por permisos
+```bash
+sudo chown -R 2000:2000 /mnt/TFG_CRIMSA/services/mattermost/
+sudo chmod -R 755 /mnt/TFG_CRIMSA/services/mattermost/
+```
 
-El contenedor se reiniciaba cada 10 segundos sin dar errores claros en el log principal.
+## 4. Configuración del Proxy y el reto de nip.io
 
-- **Causa:** Intentaba escribir en `/mnt/TFG_CRIMSA/02_DATOS/mattermost/logs` pero, como la carpeta la había creado yo como usuario "crisma", el proceso interno (UID 2000) no tenía permiso.
-- **Solución:** Revisamos los logs internos con `docker logs sphynxchat` y vimos el error de `"Permission Denied"`. Aplicamos el `chown -R 2000:2000` mencionado antes y el servicio arrancó a la primera.
+Para la salida a red, se intentó utilizar un DNS dinámico tipo `nip.io` a través de **Nginx Proxy Manager**. Sin embargo, las restricciones de red del entorno educativo bloqueaban las peticiones externas [.
 
-### Configuración del SiteURL
+**Ajuste:** Se modificó la configuración para apuntar directamente a la IP de la VPN Tailscale (100.107.56.81).
 
-Si no configuras exactamente el `MM_SERVICESETTINGS_SITEURL`, Mattermost intenta enviar a los usuarios a `localhost:8065` cuando hacen clic en algún enlace o imagen.
+**WebSockets:** Se detectó que el chat no actualizaba mensajes sin refrescar la página. Se intervino la configuración de Nginx para habilitar el soporte de WebSockets (`Upgrade` y `Connection` headers), vital para el protocolo de comunicación en tiempo real de Mattermost [web:52][web:58].
 
-- **Solución:** Forzamos en las variables de entorno el dominio nip.io para que todas las rutas internas coincidan con nuestra IP de Tailscale.
+## 5. Limitaciones de la Versión Team y Gestión de Identidad
+
+Al intentar integrar el Campus (SSO), chocamos con las limitaciones de la licencia gratuita:
+
+- **OAuth 2.0:** La versión Team bloquea el uso de proveedores genéricos (como Mailcow), permitiendo únicamente GitLab.
+- **Tokens de Acceso (PAT):** La interfaz web oculta la opción de crear tokens de acceso personal, incluso activándolos manualmente en el `config.json`   .
+
+## 6. Implementación de la API de Moderación (Polling & Webhooks)
+
+Ante la imposibilidad de crear un "Bot Account" con privilegios de sistema de forma nativa por las restricciones de la versión, se diseñó una solución de ingeniería personalizada en Python.
+
+### 6.1. Intentos fallidos con mmctl y binarios
+
+Se intentó forzar la creación de tokens mediante la CLI interna, pero los comandos han sido capados o modificados en las versiones recientes de la Team Edition:
+
+```bash
+# Comandos que devolvieron error o 'Unknown command'
+sudo docker exec -it ibischat mmctl user tokens create admin "BotToken"
+sudo docker exec -it ibischat /mattermost/bin/mattermost config set ...
+```
+
+### 6.2. Solución Final: Sistema Híbrido
+
+Se optó por un script que realiza una autenticación de sesión efímera. El script `moderator_ibis.py` se encarga de:
+
+- Realizar un login contra el endpoint `/api/v4/users/login` usando credenciales de administrador para obtener un Cookie/Token de sesión válido.
+- Monitorear el canal mediante la API de posts.
+- Ejecutar el borrado (`DELETE`) de mensajes ofensivos.
+- Notificar al canal mediante un **Incoming Webhook** configurado en la sección de Integraciones, lo cual permite que el bot "hable" sin necesidad de una cuenta de bot oficial.
+
+## 7. Configuración Visual y Canales del Campus
+
+Se creó el equipo "CRIMSA" y se estructuró el campus con canales específicos basados en el currículo de ASIR 2:
+
+- **General:** Comunicación transversal.
+- **Seguridad y Alta Disponibilidad:** Canal específico para la materia de Seguridad.
+- **Servicios de Red:** Para la gestión de servidores.
+- **Administración de SO:** Gestión de sistemas operativos.
+
+## 8. Verificación de Funcionamiento
+
+El sistema se validó mediante pruebas de usuario real con la cuenta de David Coca. Se comprobó que:
+
+- El envío de mensajes es instantáneo (WebSockets activos).
+- La persistencia en el DAS funciona (los archivos subidos aparecen en `/mnt/TFG_CRIMSA/services/mattermost/data`).
+- El moderador automático elimina términos prohibidos en menos de 2 segundos y lanza la advertencia visual a través del Webhook.
