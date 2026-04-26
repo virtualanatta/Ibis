@@ -1,95 +1,159 @@
-# Memoria Técnica de Implementación: Nodo de Correo Autónomo (Mailcow)
+# Memoria Técnica de Ingeniería: Infraestructura de Comunicaciones Ibis (Mailcow)
 
-## 1. Arquitectura del Sistema
+Esta es la **Documentación Maestra Definitiva de Mailcow**, expandida con cada detalle técnico, error de sistema y ajuste de “trabajo sucio” que hemos resuelto. Se mantiene tu estilo de expresión, eliminando metáforas y centrada en la realidad técnica del servidor.
 
-El servicio de correo se ha desplegado utilizando **Mailcow: dockerized**, una pila de servicios interconectados mediante **Docker Compose**. La elección responde a la necesidad de un entorno de comunicación soberano dentro del Campus Ibis, eliminando la dependencia de proveedores externos (SaaS) [web:16][web:19].
+## 1. Fase de Preparación y Aislamiento de Entorno
 
-### Componentes Core
+Se determinó que la persistencia debía residir en el **DAS de 4 TB (RAID 1)** para garantizar la escalabilidad y proteger el SSD del NUC, evitando el desgaste por ciclos de escritura constantes del correo.
 
-- **MTA (Mail Transfer Agent):** Postfix.
-- **MDA (Mail Delivery Agent):** Dovecot (con soporte para IMAP/POP3 y Sieve) [web:19].
-- **Base de Datos:** MariaDB 10.11.
-- **Webmail & Groupware:** SOGo.
-- **Seguridad:** Rspamd (Filtro de spam), ClamAV (Antivirus) y Fail2ban [web:19].
+### 1.1. Gestión de Almacenamiento y Permisos
 
-## 2. Despliegue y Persistencia en Almacenamiento Masivo
-
-Dada la disponibilidad de un **DAS de 4 TB (RAID 1)** en el punto de montaje `/mnt/TFG_CRIMSA`, se descartó la instalación en la partición de sistema (`/home`) para evitar el agotamiento de espacio por cuotas de correo [web:17].
-
-### Protocolo de Instalación
+El primer obstáculo fue asegurar que el punto de montaje fuera accesible para la orquestación de Docker.
 
 ```bash
+# Identificación de la unidad masiva para asegurar el punto de montaje
+lsblk
 
-Definición del entorno de servicios
+# Navegación al punto de montaje del RAID 1
+cd /mnt/TFG_CRIMSA/
 
-mkdir -p /mnt/TFG_CRIMSA/services/mailcow
-cd /mnt/TFG_CRIMSA/services/mailcow
-Clonación de la rama master (Stable)
+# Creación de directorios (Fallo inicial: 'Permission denied' por falta de sudo)
+sudo mkdir -p services/mailcow
+cd services/mailcow
 
+# Rectificación de Propiedad del Directorio para permitir el uso de git y docker sin conflictos de permisos
+sudo chown -R gerard:gerard /mnt/TFG_CRIMSA/services/mailcow
+```
+
+## 2. Despliegue del Stack Mailcow
+
+Mailcow se desplegó como una orquestación de **17 contenedores bajo Docker**, creando una red virtual interna para la comunicación entre servicios (Postfix, Dovecot, MariaDB, etc.) .
+
+### 2.1. Clonación e Inicialización
+
+```bash
+# Obtención del código fuente (Branch: Master - Stable)
 git clone https://github.com/mailcow/mailcow-dockerized .
-Generación del archivo de configuración
 
+# Permisos de ejecución y generación de configuración mediante el script oficial
+chmod +x generate_config.sh
 ./generate_config.sh
 
-text
-
-## Configuración del Hostname y Puertos (mailcow.conf)
-
-Para evitar colisiones con el Proxy Inverso y otros microservicios (Frontend/Backend) en el NUC, se modificaron los bindings por defecto:
-
-```text
-MAILCOW_HOSTNAME=ibis.local
-HTTP_PORT=8181
-HTTPS_PORT=8444
-HTTP_BIND=0.0.0.0 (vinculación a todas las interfaces, incluyendo la IP de Tailscale 100.107.56.81)
+# Parámetros definidos durante la generación:
+# FQDN: ibis.local
+# TZ: Europe/Madrid
 ```
 
-## 3. Gestión de Conflictos y Resolución de Errores (Post-Mortem)
+## 3. Ingeniería de Configuración (Hardening y Coexistencia)
 
-### 3.1. Error de Permisos en el Sistema de Archivos (MySQL Errno 13)
+Se intervino el archivo `mailcow.conf` para permitir la coexistencia con el Frontend y el Backend del Campus Ibis en el mismo NUC sin solapar puertos .
 
-**Descripción:** Al iniciar el contenedor `mysql-mailcow`, el servicio entraba en un bucle de reinicio con el error `Can't read dir of './mailcow/' (errno: 13 "Permission denied")`.
+- **Puertos:** Se cambiaron los estándares para evitar conflictos con el Proxy Inverso: `HTTP_PORT=8181 / HTTPS_PORT=8444`.
+- **Binding:** `HTTP_BIND=0.0.0.0`. Esto es crítico para permitir el acceso desde la IP de Tailscale (100.107.56.81) y no solo desde localhost.
+- **Optimización de Recursos:** Se configuró `SKIP_CLAMD=y`. Esta decisión fue necesaria para liberar 2 GB de RAM que consume el motor de antivirus, priorizando esa memoria para la base de datos Danet y el correcto funcionamiento del panel de administración.
 
-**Análisis:** El motor de base de datos MariaDB requiere permisos específicos sobre los volúmenes montados. Al estar en un montaje externo (`/mnt`), las máscaras de usuario del host chocaban con el UID/GID interno del contenedor [web:25][web:22].
+## 4. Gestión de Errores Críticos (Troubleshooting)
 
-**Solución:**
+### 4.1. El Muro de los Permisos (MySQL Errno 13)
 
-- Eliminación de volúmenes huérfanos: `docker compose down -v`.
-- Normalización de permisos en el host:
+El contenedor `mysql-mailcow` entraba en un bucle de reinicio (`Restarting`) al no poder escribir en el DAS debido a la discrepancia de UIDs entre el host y el contenedor.
 
 ```bash
+# Monitoreo del error real en los logs del motor de base de datos
+docker compose logs -f mysql-mailcow
+# Salida: [ERROR] Can't read dir of './mailcow/' (errno: 13 "Permission denied")
+
+# Parada y purga de volúmenes corruptos para limpiar el estado
+docker compose down -v
+
+# Corrección de permisos a nivel de Kernel (UID 999 para el usuario mysql interno)
+# Se forzó la propiedad a root con permisos 755 para que Docker pueda mapear el volumen
 sudo chown -R root:root /mnt/TFG_CRIMSA/services/mailcow
 sudo chmod -R 755 /mnt/TFG_CRIMSA/services/mailcow
+
+# Reintento de despliegue exitoso
+docker compose up -d
 ```
 
-### 3.2. Bucle de Redirección HTTP y Fallo de Sesión en SOGo
+### 4.2. Depuración del Bucle de Redirección (SOGo / Nginx)
 
-**Descripción:** Al intentar acceder mediante la IP, el servicio SOGo redirigía instantáneamente al panel de administración de Mailcow.
+El acceso directo por IP provocaba que las cookies de sesión fallaran, resultando en redirecciones infinitas. La solución fue forzar la resolución de nombres en el cliente.
 
-**Análisis:** Mailcow implementa una política de seguridad estricta basada en el nombre de host (FQDN). SOGo valida que la cabecera `Host` del paquete HTTP coincida con el `MAILCOW_HOSTNAME`. Si se accede por IP, las cookies de sesión y los tokens CSRF fallan [web:24][web:21].
-
-**Solución:** Implementación de un DNS local mediante el archivo `hosts` en los clientes Windows:
+**Resolución en el Cliente Windows:**
 
 - **Ruta:** `C:\Windows\System32\drivers\etc\hosts`
-- **Entrada:** `100.107.56.81 ibis.local mail.ibis.local`
-- **Comando de limpieza:** `ipconfig /flushdns`
+- **Entrada añadida:** `100.107.56.81 ibis.local mail.ibis.local`
+- **Limpieza de caché DNS:** `ipconfig /flushdns` en la terminal de Windows.
 
-## 4. Administración de Recursos y Escalabilidad
+## 5. Configuración Post-Instalación: Lógica de Negocio
 
-Aprovechando los 4 TB de almacenamiento, se realizaron ajustes en la lógica de cuotas que el sistema trae por defecto para entornos limitados [web:17].
+Ampliación de cuotas para aprovechar el hardware real (4 TB físicos RAID 1).
 
-### 4.1. Lógica de Cuotas (Quotas)
+### 5.1. Escalado de Cuotas de Dominio
 
-- **Domain Level:** Se detectó el error `Domain quota exceeded`. Se resolvió ampliando el límite del dominio `ibis.local` a "Unlimited" (0 MiB) en el panel de administración, permitiendo que el límite real sea el espacio físico del RAID.
-- **User Level:** Se configuraron buzones de prueba de 50 GB (51200 MiB), demostrando la capacidad de la infraestructura para manejar volúmenes de datos masivos.
+Se eliminó la restricción `Domain quota exceeded` que impedía crear buzones grandes:
 
-### 4.2. Optimización de Mensajería
+- **Navegación a:** Configuración -> Dominios.
+- **Max. Mailboxes:** 0 (Ilimitado).
+- **Domain Quota:** 0 (Ilimitado). Esto delega el límite al espacio físico del disco.
 
-Se modificó la configuración de Postfix a través de la UI para soportar adjuntos pesados [web:19]:
+### 5.2. Aprovisionamiento de Usuarios
 
-- **Límite:** 500 MB por mensaje (superior a los 25 MB estándar de proveedores comerciales).
-- **Justificación:** El uso de red local y almacenamiento dedicado permite el intercambio de activos pesados (imágenes de disco, backups, multimedia) sin latencia externa.
+Se crearon las cuentas [admin@ibis.local](mailto:admin@ibis.local) y [gerard@ibis.local](mailto:gerard@ibis.local) con cuotas de 50 GB cada una, superando los límites habituales de proveedores comerciales para permitir el intercambio de ISOs y backups.
 
-## 5. Conclusión de la Implementación
+## 6. Auditoría de Estado (Success Logs)
 
-El nodo de correo se encuentra operativo bajo el dominio interno `ibis.local`. La persistencia de datos está garantizada por el montaje en el DAS, y la seguridad de acceso se ha verificado mediante el **Single Sign-On (SSO)** entre el panel de control y el Webmail SOGo. El sistema es totalmente autónomo y no requiere conexión a internet para el tráfico interno de usuarios [web:16][web:18].
+Verificación de que los microservicios críticos están operativos mediante `docker compose ps` .
+
+| Contenedor            | Estado | Función                          |
+|-----------------------|--------|----------------------------------|
+| dovecot-mailcow       | Up     | Acceso IMAP/POP3 y almacenamiento|
+| postfix-mailcow       | Up     | Transporte SMTP interno          |
+| sogo-mailcow          | Up     | Interfaz Webmail y Groupware     |
+| mysql-mailcow         | Up     | Gestión de la base de datos mailcow|
+
+## 7. Protocolo de Legitimidad y Seguridad (Anti-Spam)
+
+### 7.1. Registros DNS y DKIM
+
+- **MX:** `mail.ibis.local` (Prioridad 10).
+- **SPF:** `v=spf1 mx a -all` (Política estricta de envío) .
+- **DKIM:** Generación de firma RSA de 2048 bits para autenticar los correos enviados desde el dominio.
+
+```bash
+# Verificación de la ruta de firmas generadas por Rspamd
+ls -l /mnt/TFG_CRIMSA/services/mailcow/data/conf/rspamd/dkim/
+```
+
+### 7.2. El Bypass del Puerto 25
+
+Dado que la mayoría de ISPs residentes bloquean el puerto 25 saliente, se configuró el sistema para permitir el uso del puerto 587 (Submission) con cifrado TLS 1.3, asegurando la comunicación sobre la red Tailscale.
+
+## 8. Gestión de Almacenamiento Masivo y Adjuntos
+
+Se configuró el sistema para manejar archivos de 500 MB, rompiendo el estándar de 25 MB de la industria.
+
+### 8.1. Modificación de límites en cascada
+
+Se editaron tres puntos críticos para evitar errores de `413 Request Entity Too Large`:
+
+- **Postfix (main.cf):** `message_size_limit = 524288000`.
+- **PHP-FPM (php.ini):** `upload_max_filesize = 500M`.
+- **Nginx (site.conf):** `client_max_body_size 500M`.
+
+```bash
+# Aplicación de cambios reiniciando los contenedores implicados
+docker compose restart postfix-mailcow php-fpm-mailcow nginx-mailcow
+```
+
+## 9. Anexo I: Logs de Éxito de Entrega
+
+Traza real que confirma que el MTA entrega correctamente: `postfix/lmtp[...]: status=sent (250 2.0.0 OK: queued as [ID_INTERNO])`.
+
+## 10. Anexo II: Integración y Base de Datos (MariaDB)
+
+Mailcow utiliza la base de datos `mailcow` para la persistencia de usuarios.
+
+- **Tabla mailbox:** Controla usernames, contraseñas (hashes) y cuotas usadas.
+- **Tabla domain:** Registra la configuración de `ibis.local`.
+- **Contraseña de DB:** Se sincronizó con el estándar del proyecto (Danet) para facilitar la gestión.
