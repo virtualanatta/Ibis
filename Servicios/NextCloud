@@ -1,49 +1,114 @@
-# Almacenamiento en la Nube: Nextcloud
+Para que tu memoria del TFG sea de matrícula de honor, no podemos dejar ni un solo comando en el tintero. He recopilado la secuencia cronológica exacta y minuciosa de todo lo que hemos hecho para levantar el ecosistema, corregir los errores de red y sincronizar los servicios.
 
-Para que el campus Ibis sea una herramienta completa, no bastaba con tener una base de datos y un chat; necesitábamos un lugar donde alumnos y profesores pudieran subir apuntes, entregas y archivos pesados de forma estructurada. En lugar de depender de servicios como Google Drive o Dropbox, donde perdemos la soberanía de los archivos, decidimos desplegar **Nextcloud**. Es nuestra nube privada que corre directamente sobre el NUC y guarda todo en nuestro almacenamiento masivo.
+Aquí tienes la bitácora técnica completa:
+1. Configuración de Red y Resolución de Nombres (Lado Cliente)
 
-## La infraestructura detrás de la nube
+Antes de tocar el servidor, tuvimos que asegurar que el PC cliente (Windows) supiera dónde están los servicios sin usar IPs.
 
-Nextcloud no es un programa ligero; es una suite completa que requiere varios servicios trabajando en paralelo para no volverse lenta. En nuestro stack de Docker, lo hemos separado en tres piezas clave:
+Archivo: C:\Windows\System32\drivers\etc\hosts
+Acción: Se movieron las entradas al principio del archivo para evitar interferencias de Tailscale MagicDNS y el protocolo mDNS de Windows.
+Plaintext
 
-- **El Servidor Web (App):** El contenedor que sirve la interfaz y gestiona los archivos.
-- **La Base de Datos:** Usamos una instancia de MariaDB dedicada exclusivamente a Nextcloud para gestionar los metadatos y la estructura de carpetas.
-- **El Sistema de Caché (Redis):** Fundamental para que la navegación por las carpetas sea fluida. Sin Redis, cada vez que un usuario entra a una carpeta con muchos archivos, el servidor tendría que consultar la base de datos una y otra vez, ralentizando la experiencia.
+# Entradas manuales para el Campus Ibis
+100.107.56.81  ibis.local
+100.107.56.81  nube.ibis.local
+100.107.56.81  mail.ibis.local
+100.107.56.81  nube.ibis.test
 
-## Despliegue y Orquestación
+Comando de limpieza de caché (CMD como Admin):
+DOS
 
-La instalación se realiza mediante Docker Compose, integrando el servicio en la red `crisma_network`. Esto permite que Nextcloud se comunique con su base de datos de forma interna, sin exponer puertos de datos al host.
+ipconfig /flushdns
 
-Variables de entorno configuradas:
+2. Preparación del "Gateway" (Mailcow)
 
-- `MYSQL_DATABASE`: `nextcloud`
-- `MYSQL_USER`: `nextcloud`
-- `MYSQL_PASSWORD`: `xxxx`
-- `NEXTCLOUD_ADMIN_USER`: `admin`
-- `NEXTCLOUD_ADMIN_PASSWORD`: `xxxx`
-- `NEXTCLOUD_TRUSTED_DOMAINS`: `cloud.100.107.56.81.nip.io`
+Para que Mailcow no "secuestrara" el tráfico de la nube, tuvimos que modificar su comportamiento de proxy.
+2.1. Modificación de mailcow.conf
 
-## El reto de la persistencia y los 4 TB
+Ruta: /mnt/TFG_CRIMSA/services/mailcow/mailcow.conf
+Acción: Se eliminó nube.ibis.local de los nombres adicionales para dejar que el proxy manual tomara el control.
+Bash
 
-Configurar Nextcloud para que use el DAS fue uno de los pasos más importantes. Por defecto, Nextcloud intenta guardar los archivos dentro del contenedor, lo que llenaría el SSD del NUC en cuestión de minutos. Para evitarlo, mapeamos el volumen de datos directamente a nuestra estructura en el RAID 1.
+# Editar el archivo
+sudo nano /mnt/TFG_CRIMSA/services/mailcow/mailcow.conf
 
-Mapeo de rutas en el DAS:
+# Buscar y modificar esta línea:
+ADDITIONAL_SERVER_NAMES=ibis.local,mail.ibis.local
 
-- **Directorio de datos:** `/mnt/TFG_CRIMSA/02_DATOS/nextcloud/data:/var/www/html/data`
-- **Configuración:** `/mnt/TFG_CRIMSA/02_DATOS/nextcloud/config:/var/www/html/config`
+2.2. Creación del Proxy Inverso para Nextcloud
 
-Al igual que con Mattermost, tuvimos que pelear con los permisos de Linux. Nextcloud espera que el usuario `www-data` (UID 33) sea el dueño de las carpetas. Si el DAS no tiene estos permisos aplicados (`sudo chown -R 33:33 /mnt/TFG_CRIMSA/02_DATOS/nextcloud`), el sistema se bloquea por seguridad y no permite subir ni un solo archivo.
+Ruta: /mnt/TFG_CRIMSA/services/mailcow/data/conf/nginx/00-nextcloud.conf
+Comando:
+Bash
 
-## Ajustes técnicos y el Proxy Inverso
+sudo nano /mnt/TFG_CRIMSA/services/mailcow/data/conf/nginx/00-nextcloud.conf
 
-Para que Nextcloud funcione correctamente detrás de Nginx Proxy Manager, no basta con redirigir el puerto `80`. Tuvimos que realizar ajustes manuales en el archivo `config.php` de Nextcloud para que el sistema "confíe" en el proxy.
+Se usó el prefijo 00- para asegurar prioridad de carga en Nginx.
+3. Despliegue del Contenedor Nextcloud
 
-Uno de los errores más comunes es que la nube intente redirigir a una IP interna o dé errores de seguridad al entrar por el dominio nip.io. Para solucionarlo, configuramos los parámetros `overwrite.cli.url` y `trusted_proxies`. Esto le dice a Nextcloud: "Oye, si alguien entra por esta URL de Tailscale, déjale pasar porque el Proxy ya ha validado que es seguro". Además, activamos el soporte de subidas pesadas en el Proxy, ya que por defecto Nginx limita los archivos a pocos megabytes, lo que impediría a los alumnos subir proyectos grandes de programación.
+Pasamos de una imagen FPM (que fallaba con el proxy) a una Apache (totalmente compatible).
+3.1. Archivo docker-compose-nextcloud.yml
+Bash
 
-## Acceso y uso en el Campus
+sudo nano /mnt/TFG_CRIMSA/services/mailcow/docker-compose-nextcloud.yml
 
-Para entrar a la nube, la ruta es transparente gracias a nuestro sistema de subdominios:
+(Contenido detallado en la respuesta anterior con la imagen nextcloud:latest y volumen en el DAS).
+3.2. Comandos de despliegue:
+Bash
 
-- **URL:** `http://cloud.100.107.56.81.nip.io`
+# Levantar el servicio
+sudo docker compose -f /mnt/TFG_CRIMSA/services/mailcow/docker-compose-nextcloud.yml up -d
 
-Una vez dentro, hemos configurado cuotas de disco para que ningún usuario pueda "comerse" los 4 TB él solo. El sistema permite compartir enlaces públicos (con contraseña y fecha de caducidad) y sincronizar las carpetas directamente con el portátil mediante el cliente de escritorio de Nextcloud, siempre que la VPN Tailscale esté activa.
+# Reiniciar el proxy de Mailcow para aplicar la nueva ruta
+sudo docker restart mailcowdockerized-nginx-mailcow-1
+
+4. Gestión de Persistencia y Permisos (El DAS)
+
+Este es el punto más crítico para la estabilidad del almacenamiento de 4 TB.
+4.1. Verificación de IP interna:
+Bash
+
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' nextcloud-mailcow
+
+4.2. Corrección de permisos de Linux (Propiedad del UID 33):
+
+Nextcloud corre bajo el usuario www-data (ID 33). Si el DAS es de root, no funciona.
+Bash
+
+# Cambiar dueño de forma recursiva en el DAS
+sudo chown -R 33:33 /mnt/TFG_CRIMSA/services/nextcloud/data
+sudo chown -R 33:33 /mnt/TFG_CRIMSA/services/nextcloud/config
+
+# Asegurar permisos de ejecución en carpetas
+sudo chmod -R 775 /mnt/TFG_CRIMSA/services/nextcloud/config
+
+5. Configuración Interna de Nextcloud (Comandos OCC)
+
+Sin estos comandos, Nextcloud daría errores de "Dominio no confiable".
+5.1. Definir dominios permitidos:
+Bash
+
+sudo docker exec --user www-data nextcloud-mailcow php occ config:system:set trusted_domains 2 --value="nube.ibis.local"
+
+5.2. Configurar el Proxy como seguro:
+Bash
+
+sudo docker exec --user www-data nextcloud-mailcow php occ config:system:set trusted_proxies 0 --value="172.22.1.1"
+
+5.3. Forzar el protocolo (Evitar bucles de redirección):
+Bash
+
+sudo docker exec --user www-data nextcloud-mailcow php occ config:system:set overwriteprotocol --value="http"
+
+6. Comandos de Diagnóstico y Mantenimiento
+
+Estos son los comandos que usamos para "ver" qué estaba fallando.
+
+    Validar sintaxis de Nginx:
+    sudo docker exec mailcowdockerized-nginx-mailcow-1 nginx -t
+
+    Ver logs en tiempo real de la nube:
+    sudo docker logs -f nextcloud-mailcow
+
+    Prueba de conectividad interna Proxy -> Nube:
+    sudo docker exec mailcowdockerized-nginx-mailcow-1 curl -I http://nextcloud-mailcow
