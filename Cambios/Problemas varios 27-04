@@ -80,12 +80,12 @@ sudo docker run -d \
   --restart unless-stopped \
   -p 3005:3000 \
   -v /mnt/TFG_CRIMSA/01_PROYECTO/CODIGO/backend/src:/app/src \
-  --network ibis_net \
-  -e DB_HOST=crisma_db \
-  -e DB_USER=Crisma \
-  -e DB_PASSWORD=Ucq8Oal7g4zN \
-  -e DB_NAME=danet \
-  -e DB_PORT=5432 \
+  --network t \
+  -e DB_HOST= \
+  -e DB_USER= \
+  -e DB_PASSWORD= \
+  -e DB_NAME= \
+  -e DB_PORT= \
   tfg_crimsa-backend
 
 # Verificar conectividad por nombre
@@ -180,11 +180,11 @@ sudo docker run -d \
   --restart unless-stopped \
   -p 3005:3000 \
   -v /mnt/TFG_CRIMSA/01_PROYECTO/CODIGO/backend/src:/app/src \
-  --network ibis_net \
-  -e DB_HOST=crisma_db \
-  -e DB_USER=Crisma \
-  -e DB_PASSWORD=Ucq8Oal7g4zN \
-  -e DB_NAME=danet \
+  --network  \
+  -e DB_HOST= \
+  -e DB_USER= \
+  -e DB_PASSWORD= \
+  -e DB_NAME= \
   -e DB_PORT=5432 \
   tfg_crimsa-backend
 
@@ -359,11 +359,11 @@ sudo docker run -d \
   --restart unless-stopped \
   -p 3005:3000 \
   -v /mnt/TFG_CRIMSA/01_PROYECTO/CODIGO/backend/src:/app/src \
-  --network ibis_net \
-  -e DB_HOST=crisma_db \
-  -e DB_USER=Crisma \
-  -e DB_PASSWORD=Ucq8Oal7g4zN \
-  -e DB_NAME=danet \
+  --network  \
+  -e DB_HOST= \
+  -e DB_USER=\
+  -e DB_PASSWORD= \
+  -e DB_NAME= \
   -e DB_PORT=5432 \
   tfg_crimsa-backend
 
