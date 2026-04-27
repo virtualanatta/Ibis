@@ -1,0 +1,154 @@
+# Parte 1: El Corazón de la Comunicación (Telegram)
+
+Antes de tocar el servidor, necesitamos el canal por donde recibiremos las alertas y enviaremos las órdenes.
+
+## 1.1. Creación del Bot
+
+- Busca en Telegram al usuario `@BotFather`.
+- Escribe `/newbot`.
+- Asigna un nombre (ej.: `Ibis_Seguridad_Bot`) y un nombre de usuario único.
+- **Guardado del Token:** BotFather te dará un código largo (ej.: `8274814493:AAGc...`). Este es el Token de acceso que permite a n8n y a los scripts hablar por el bot.
+
+## 1.2. Obtención de tu ID de Administrador
+
+El bot necesita saber quién eres tú para enviarte solo a ti los mensajes.
+
+- Busca en Telegram al usuario `@userinfobot`.
+- Escribe cualquier cosa y te devolverá un número (ej.: `12345678`).
+- Este es tu **Chat ID**.
+
+# Parte 2: Infraestructura de Scripts en el Servidor
+
+Creamos una estructura de archivos organizada para separar la lógica de seguridad del resto del proyecto.
+
+## 2.1. Directorio de Trabajo
+
+```bash
+mkdir -p /mnt/TFG_CRIMSA/01_PROYECTO/scripts/IbisScripts
+```
+
+## 2.2. El Archivo de Entorno (.env)
+
+Para no escribir contraseñas en los scripts, lo cual sería una mala práctica, creamos un archivo oculto:
+
+```bash
+nano /home/gerard/.config/crimsa/env
+```
+
+### Contenido
+
+```bash
+TELEGRAM_TOKEN="tu_token_aqui"
+ID_CHAT="tu_id_aqui"
+```
+
+## 2.3. Script de Defensa (defensa.sh)
+
+Es el encargado de ejecutar acciones reales en el sistema.
+
+- **Función:** Recibe órdenes de n8n para bloquear IPs en el firewall (`ufw`) o expulsar usuarios (`pkill`).
+- **Seguridad:** Incluimos un filtro para que nunca bloquee la IP de Tailscale (`100.x.x.x`) y así no quedarnos nosotros fuera del servidor por error.
+
+# Parte 3: Despliegue de n8n (El Orquestador)
+
+Usamos Docker para que el sistema sea fácil de mover y actualizar.
+
+## 3.1. Instalación y Error de Permisos
+
+### Comando inicial
+
+```bash
+sudo docker run -d --name n8n_ibis -p 5678:5678 -v /mnt/TFG_CRIMSA/05_SISTEMA/n8n_data:/home/node/.n8n n8nio/n8n
+```
+
+### Error documentado
+
+Al mirar los logs con `docker logs n8n_ibis`, vimos un error `EACCES: permission denied`.
+
+- **Causa:** n8n usa internamente el usuario `node` y no tiene permiso para escribir en la carpeta de Linux.
+- **Solución:** Cambiar el dueño de la carpeta al usuario `1000`.
+
+```bash
+sudo chown -R 1000:1000 /mnt/TFG_CRIMSA/05_SISTEMA/n8n_data
+```
+
+## 3.2. Activación del Túnel HTTPS
+
+Telegram exige que el servidor use HTTPS. Como no tenemos certificado SSL en la IP privada, usamos el túnel interno de n8n.
+
+- Añadir `-e N8N_USE_TUNNEL=true` al comando de Docker.
+- Esto genera una URL tipo `https://random-name.hooks.n8n.cloud`.
+
+# Parte 4: Configuración de n8n (Click a Click)
+
+Aquí es donde se une todo. Creamos dos flujos independientes, es decir, dos ramas.
+
+## Rama A: La Notificación (Del Servidor al Móvil)
+
+### Nodo Webhook (Inicio)
+
+- Click en **HTTP Method**: elegir `POST`.
+- Click en **Path**: escribir `alerta-seguridad`.
+
+### Nodo HTTP Request (Investigación)
+
+- Click en **Method**: `GET`.
+- Click en **URL**: escribir `http://ip-api.com/json/{{ $json.ip }}`.
+- Esto saca la ciudad y el país de la IP.
+
+### Nodo Telegram (Envío)
+
+- Click en **Resource**: `Message`.
+- Click en **Operation**: `SendMessage`.
+- Click en **Reply Markup**: elegir `Inline Keyboard`.
+
+### Botones
+
+- **Botón 1:** `Label: Bloquear IP`, `Data: bloquear_{{ $json.ip }}`
+- **Botón 2:** `Label: Expulsar Usuario`, `Data: expulsar_{{ $json.usuario }}`
+
+## Rama B: La Respuesta (Del Móvil al Servidor)
+
+### Nodo Telegram Trigger (Escucha)
+
+- Click en **Trigger On**: elegir `On callback query`.
+- Esto detecta cuando pulsas los botones.
+
+### Nodo SSH (Acción)
+
+- Configura los datos de tu servidor: IP, usuario `gerard` y contraseña.
+- **Command:** escribe la ruta al script:
+
+```bash
+sudo /mnt/TFG_CRIMSA/.../defensa.sh
+```
+
+# Parte 5: Permisos Finales y Sudo
+
+Como n8n es un sistema automático, cuando intenta bloquear una IP, el servidor le pedirá la contraseña. Para evitar que el proceso se quede colgado esperando:
+
+```bash
+sudo visudo
+```
+
+Añade al final:
+
+```bash
+gerard ALL=(ALL) NOPASSWD: /mnt/TFG_CRIMSA/01_PROYECTO/scripts/IbisScripts/defensa.sh
+```
+
+Esto permite que n8n ejecute solo ese script con privilegios de administrador sin pedir clave.
+
+# Parte 6: La Verificación del Sistema
+
+Para confirmar que el tutorial se ha seguido bien, lanzamos una simulación desde la terminal enviando datos falsos:
+
+```bash
+curl -X POST -d '{"evento": "Test", "ip": "8.8.8.8", "usuario": "intruso"}' http://localhost:5678/webhook/alerta-seguridad
+```
+
+## Resultado esperado
+
+- Te llega el mensaje a Telegram con la ubicación (`California, USA`) y los botones.
+- Al pulsar **Bloquear**, el nodo SSH de n8n se pone en verde.
+- La IP aparece en `sudo ufw status`.
