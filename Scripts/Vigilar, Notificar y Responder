@@ -1,0 +1,121 @@
+# 1: El Sistema de Seguridad Activa (IbisScripts)
+
+Estos son los scripts que convierten el servidor en una fortaleza interactiva.
+
+## 1. bot.sh: El Emisor de Alertas
+
+Es el núcleo de la comunicación. Centraliza el envío de mensajes a Telegram cargando las credenciales desde un archivo seguro para no exponer el Token.
+
+### Código Clave
+
+```bash
+source /home/gerard/.config/crimsa/env # Carga Token y ChatID
+curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
+     -d "chat_id=$ID_CHAT" -d "text=$MENSAJE"
+```
+
+## 2. guardian.sh: El Analista de Amenazas
+
+Utiliza `auditd` para monitorizar el Kernel. Detecta comportamientos sospechosos como el "Scrapping" (lectura masiva de archivos) o intentos de fuerza bruta.
+
+### Código Clave (Detección de ráfagas)
+
+```bash
+# Cuenta cuántas veces se ejecutó 'cat' en el último minuto
+CAT_BURST=$(sudo ausearch -k ibis_commands --start recent 2>/dev/null | grep "exe=\"/bin/cat\"" | wc -l)
+if [ "$CAT_BURST" -gt 15 ]; then
+    # Envía la alerta si se supera el umbral
+    $BOT "ALERTA FISGÓN: $CAT_BURST lecturas detectadas."
+fi
+```
+
+## 3. defensa.sh: El Brazo Ejecutor
+
+Ejecuta las órdenes que tú envías desde el móvil. Está diseñado para ser modular y recibir parámetros (bloquear, expulsar o nuclear).
+
+### Código Clave (Bloqueo de Firewall)
+
+```bash
+case $ACCION in
+    "bloquear")
+        # Inserta la regla de baneo en la posición 1 para máxima prioridad
+        sudo ufw insert 1 deny from "$OBJETO"
+        $BOT "IP BLOQUEADA: $OBJETO baneada en el Firewall."
+        ;;
+esac
+```
+
+# Bloque 2: Monitorización y Dashboard
+
+Scripts que aseguran que el hardware y los servicios estén siempre operativos.
+
+## 4. check_recursos.sh: Vigilante de Hardware
+
+Evita que el servidor se cuelgue por falta de RAM, calculando el porcentaje real disponible y avisando si baja del 15%.
+
+### Código Clave
+
+```bash
+RAM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
+RAM_DISP=$(free -m | awk '/^Mem:/{print $7}')
+PERC_DISP=$(( RAM_DISP * 100 / RAM_TOTAL ))
+```
+
+## 5. check_and_fix_db.sh: Autoreparación de Base de Datos
+
+Si el contenedor de la base de datos se apaga o el servicio de Postgres deja de responder, este script lo detecta y lo reinicia automáticamente.
+
+### Código Clave
+
+```bash
+if ! docker exec crisma_db pg_isready -q; then
+    echo "Postgres no responde. Reiniciando..."
+    docker restart crisma_db
+fi
+```
+
+## 6. generar_dashboard.sh: Integración con la Web
+
+Extrae el estado del disco de 4TB y lo formatea en un archivo JSON que el Frontend de React lee para mostrar el estado en tiempo real.
+
+### Código Clave (Generación de JSON)
+
+```bash
+cat <<EOF > $JSON_OUT
+{
+    "storage": {
+        "total": "$DISK_TOTAL",
+        "used": "$DISK_USED",
+        "percent": "$DISK_PERC"
+    }
+}
+EOF
+```
+
+# Bloque 3: Mantenimiento y Backups
+
+## 7. ejecutar_backup_total.sh: Respaldo Integral
+
+Realiza una copia completa del sistema: Base de Datos Danet, usuarios globales de Postgres y el código fuente del Backend (incluyendo archivos subidos por alumnos).
+
+### Código Clave (Exportación Segura)
+
+```bash
+export PGPASSWORD='[CONTRASENA_CIFRADA]'
+# Volcado de la DB y roles globales
+docker exec -e PGPASSWORD=$PGPASSWORD crisma_db pg_dump -U Crisma Danet > "$DESTINO/base_datos.sql"
+docker exec -e PGPASSWORD=$PGPASSWORD crisma_db pg_dumpall --globals-only -U Crisma > "$DESTINO/usuarios.sql"
+```
+
+# Comandos Críticos de Configuración
+
+Para que estos scripts funcionen, tuvimos que preparar el sistema con acciones que debes documentar:
+
+**Vigilancia del Sistema (auditd):** Instalamos el demonio de auditoría y creamos reglas para vigilar la carpeta del proyecto y el comando `execve`.  
+**Error superado:** Intentamos escribir reglas con `cat` y dio error de permisos. Se solucionó usando `sudo tee /etc/audit/rules.d/ibis_security.rules`.
+
+**Permisos de Ejecución Automática (visudo):** Para que n8n pueda bloquear IPs sin pedirte la contraseña de Gerard cada vez: `gerard ALL=(ALL) NOPASSWD: /mnt/TFG_CRIMSA/01_PROYECTO/scripts/IbisScripts/defensa.sh`
+
+**Arreglo de permisos Docker (n8n):** El contenedor de n8n fallaba al arrancar (EACCES). Lo arreglamos mapeando los permisos al usuario interno del contenedor: `sudo chown -R 1000:1000 /mnt/TFG_CRIMSA/05_SISTEMA/n8n_data`
+
+**Notificación SSH Silenciosa:** Añadimos un script en `/etc/profile.d/ibis_notify.sh` para que el servidor te avise solo cuando entra una persona real (sesión interactiva) y no con cada proceso automático.
