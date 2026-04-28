@@ -4,50 +4,67 @@ Este archivo es un módulo fundamental del sistema. Gestiona todo lo relacionado
 
 ---
 
-## 1. index.js
+## 1. Importaciones y Configuración (Multer)
 
-El `index.js` es el punto de entrada principal. Configura el servidor, los middlewares de seguridad y reparte el tráfico hacia las rutas específicas.
+```javascript
+const express = require('express');
+const router = express.Router();
+const db = require('../config/db');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
-### Middlewares Principales
-- **CORS & Helmet**: Protegen la API y permiten la comunicación con el Frontend (React).
-- **express.json() & cookieParser()**: Permiten procesar datos en formato JSON y gestionar las cookies de sesión.
-- **express.static**: Convierte la carpeta `/uploads` en pública para que los PDFs de tareas y materiales sean accesibles vía URL.
+// Configuración de Multer para guardar archivos localmente
+const storage = multer.diskStorage({ ... });
+const upload = multer({ storage });
+```
 
-### Gestión de Contenidos
-El servidor combina consultas SQL de `material_clase` y `tareas` para entregar al alumno una lista unificada de contenidos mediante el operador *spread* de JavaScript.
-
-### Subida de Archivos (Multer)
-Utiliza **Multer** para interceptar archivos físicos, renombrarlos con un sello de tiempo (`Date.now()`) para evitar duplicados y guardarlos en el disco duro antes de registrar su ruta en PostgreSQL.
-
----
-
-## 2. routes/profesorRoutes.js (Gestión de Profesores)
-
-Este archivo utiliza un enrutador independiente para organizar las peticiones exclusivas del personal docente.
-
-### Estructura
-- **Modularización**: Separa las rutas de la lógica de negocio importando `profesorController`.
-- **Rutas Dinámicas**: 
-  - `GET /mis-cursos/:id`: Captura el ID del profesor desde la URL para filtrar sus clases específicas en la base de datos.
-
-**Valor Técnico:** Aplica el principio de responsabilidad única, facilitando la escalabilidad del proyecto sin saturar el archivo principal.
+- **Librerías Nativas (`path`, `fs`)**: Se utilizan para manejar rutas de carpetas de forma segura y para crear la carpeta `/uploads/materiales/` automáticamente si no existe (vital en contenedores Docker).
+- **Multer (`diskStorage`)**: Actúa como un interceptor. Configura exactamente dónde se van a guardar los archivos físicos en el disco y les asigna un nombre único usando la fecha en milisegundos (`Date.now()`) para evitar que si se suben dos archivos con el mismo nombre se sobrescriban.
 
 ---
 
-## 3. routes/cursosRoutes.js (Gestión Académica y Archivos)
+## 2. Subida y Consulta de Materiales
 
-Es el módulo más robusto, encargado de la relación entre alumnos, profesores y materiales físicos.
+```javascript
+router.post('/:cursoId/materiales/upload', upload.single('archivo'), async (req, res) => { ... });
+router.get('/:cursoId/materiales', async (req, res) => { ... });
+```
 
-### Configuración de Almacenamiento
-- **Multer Avanzado**: Implementa `diskStorage` para organizar las subidas en carpetas dinámicas. Usa `fs.mkdirSync` para asegurar que las carpetas existan en el servidor (crucial para entornos Docker).
+- **Subida (`.post`)**: 
+  - Usa el middleware `upload.single('archivo')` para procesar el PDF/imagen antes de ejecutar el código.
+  - Guarda el archivo físico y hace un `INSERT INTO material_clase` en PostgreSQL guardando la ruta lógica (`archivo_url`) para poder enlazarlo en el Frontend.
+- **Listado (`.get`)**: Devuelve al Frontend todos los materiales de un curso específico, ordenados por fecha.
 
-### Endpoints Clave
-1. **Subida de Material (`POST /:cursoId/materiales/upload`)**: 
-   - Procesa el archivo físico.
-   - Registra metadatos en la DB (tamaño, tipo de archivo, URL lógica).
-2. **Vistas de Rol (`GET /profesor/:id` y `GET /alumno/:id`)**:
-   - **Profesor**: Usa `LEFT JOIN` y subconsultas para contar alumnos matriculados.
-   - **Alumno**: Filtra mediante un `JOIN` con la tabla `matriculas` para mostrar solo sus clases asignadas.
-3. **Listado de Alumnos (`GET /:cursoId/alumnos`)**: 
-   - Realiza un `INNER JOIN` entre `usuarios` y `matriculas` para generar actas de clase ordenadas alfabéticamente.
+---
 
+## 3. Obtención de Cursos (Lógica de Roles)
+
+```javascript
+router.get('/profesor/:id', async (req, res) => { ... });
+router.get('/alumno/:id', async (req, res) => { ... });
+```
+
+- **Vista Profesor**: Ejecuta un `SELECT` para obtener todos los cursos que imparte ese profesor (`c.profesor_id = $1`), incluyendo una subconsulta para contar (`COUNT`) los alumnos matriculados en sus clases.
+- **Vista Alumno**: Utiliza un `LEFT JOIN` con las materias y un `JOIN` con la tabla `matriculas` para devolver **únicamente** las asignaturas a las que ese alumno en particular tiene acceso.
+
+---
+
+## 4. Listado de Alumnos por Curso
+
+```javascript
+router.get('/:cursoId/alumnos', async (req, res) => { ... });
+```
+
+- **Propósito**: Generar el "acta" o listado de clase para los profesores.
+- **Lógica SQL**: Utiliza un `INNER JOIN` entre la tabla `usuarios` y la tabla `matriculas` para extraer los nombres y correos de los estudiantes, ordenados alfabéticamente.
+
+---
+
+## 5. Exportación
+
+```javascript
+module.exports = router;
+```
+
+- Empaqueta todas estas rutas (subidas, vistas de profesor, vistas de alumno) en un solo módulo que `index.js` importará bajo el prefijo `/api/cursos`.
