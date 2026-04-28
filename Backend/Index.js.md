@@ -1,3 +1,9 @@
+# Documentación Técnica Backend
+
+Este documento detalla la arquitectura, rutas y lógica de negocio del servidor desarrollado en Node.js/Express para el sistema de gestión de aprendizaje (LMS) de Hogwarts.
+
+---
+
 ## 1. Importaciones
 
 Al principio llamamos a todas las librerias para que Node.js pueda trabajar
