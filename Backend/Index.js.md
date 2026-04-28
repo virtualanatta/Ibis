@@ -1,112 +1,83 @@
-# Documentación Técnica Backend
+#  Documentación Técnica Backend: Plataforma Hogwarts
 
 Este documento detalla la arquitectura, rutas y lógica de negocio del servidor desarrollado en Node.js/Express para el sistema de gestión de aprendizaje (LMS) de Hogwarts.
 
 ---
 
-## 1. Importaciones
+##  1. index.js (El Núcleo del Servidor)
 
-Al principio llamamos a todas las librerias para que Node.js pueda trabajar
+Es el punto de entrada principal que levanta el servicio y coordina todos los módulos.
 
-- `express` Es el motor principal del servidor web
-- `cors` y `helmet` Herramientas de seguridad
-- `morgan` Lo que usamod para que nos de los logs
-- `path` y `fs` Herramientas para leer carpetas y discos duros
-- `multer` El gestor de descargas y subida de archivos
-- `db` Conexión directa a la base de datos
-- `oidcRoutes` Gestión de autenticación avanzada o externa
+### Middlewares y Seguridad
+- **CORS & Helmet**: Permiten la comunicación segura con el Frontend (React) y protegen las cabeceras HTTP.
+- **Morgan**: Sistema de logs para monitorear peticiones en tiempo real.
+- **express.static**: Define la carpeta `/uploads` como pública para servir los archivos PDF de forma directa.
 
-## 2. Middelewares
+### Funcionalidades Clave
+- **Autenticación**: Gestiona el endpoint de login y utiliza `cookieParser` para el manejo de sesiones.
+- **Contenidos Mixtos**: Implementa rutas que fusionan materiales y tareas en una sola respuesta JSON para facilitar el renderizado en React.
+- **Visibilidad Dinámica**: Permite a los profesores ocultar o mostrar contenido con un solo clic mediante una ruta genérica de actualización.
 
+---
+
+##  2. routes/profesorRoutes.js (Rutas Docentes)
+
+Módulo encargado de las vistas específicas para el personal docente.
+
+### Endpoints
+- **`GET /mis-cursos/:id`**: Devuelve la lista de asignaturas asignadas a un profesor específico.
+
+**Valor Técnico:** Sigue el principio de **Responsabilidad Única**, delegando la lógica de las consultas SQL al controlador de profesores para mantener un código limpio y escalable.
+
+---
+
+##  3. routes/cursosRoutes.js (Gestión Académica y Multer)
+
+Este es el módulo más complejo, ya que gestiona la relación entre usuarios, cursos y archivos físicos.
+
+### Configuración de Multer (Gestión de Archivos)
+```javascript
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => { /* Crea carpetas automáticamente */ },
+  filename: (req, file, cb) => { /* Evita duplicados con Date.now() */ }
+});
 ```
-const app = express();
-app.use(cors({ origin: true, credentials: true }));
-app.use(helmet({ crossOriginResourcePolicy: false }));
-app.use(morgan("dev"));
-app.use(express.json());
-app.use(cookieParser());
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
-```
+Implementa una lógica robusta que asegura la existencia de carpetas en el servidor (vital para contenedores **Docker**) y previene la sobrescritura de archivos.
 
-Antes que una peticion llegue a la base de datos pasa por estos filtros
+### Endpoints Destacados
+- **Gestión de Materiales**: Permite subir PDFs (`POST`) y listar contenidos (`GET`) vinculando el archivo físico con un registro en PostgreSQL.
+- **Vistas por Rol**:
+  - **Profesor**: Obtiene cursos con conteo de alumnos matriculados.
+  - **Alumno**: Utiliza `JOIN` con la tabla `matriculas` para mostrar solo las clases asignadas al estudiante.
+- **Actas de Clase**: Genera listas de alumnos por curso ordenadas alfabéticamente por apellido.
 
-- `cors` Da permiso al frontend para hablar con el backend sin que el navegador bloquee la conexion por seguridad
-- `helmet` Oculta detalles técnicos del servidor en las cabeceras HTTP para evitar hackeos
-- `express.json` Traduce los datos que manda React en formato texto a objetos JavaScript (req.body) que Node pueda entender
-- `cookieParser` Permite al servidor leer las "cookies" del navegador del usuario, algo fundamental para mantener la sesión abierta de forma segura
+---
 
+##  4. routes/adminRoutes.js (Gestión de Usuarios)
 
-## 3. Enrutadores Externos
+Define las operaciones críticas para los administradores del sistema.
 
-```
-app.post("/api/login", authController.login);
-app.use("/api/cursos", cursosRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/auth", oidcRoutes);
-```
-
-Aquí el index.js actúa como semáforo. Si alguien intenta hacer Login, lo manda al controlador de autenticación
-
-
-## 4. Obtener Contenidos de un Curso
-
-```
-app.get("/api/contenidos/:cursoId", async (req, res) => { ... }
-```
-
-Con esto hacemos dos consultas al mismo tiempo
-- Busca todo el material de clase
-- Busca todas las tareas
-
-Luego se fusionan en una lista para ser enviados al react
-
-
-## 5. Subida de Archivos
-
-```
-const storage = multer.diskStorage({ ... })
-const upload = multer({ storage });
-app.post("/api/upload", upload.single("archivo"), async (req, res) => { ... }
+### Operaciones CRUD de Usuarios
+```javascript
+router.get('/users', adminController.getUsers);
+router.post('/users', adminController.createUser);
+router.put('/users/:id/role', adminController.updateUserRole);
+router.put('/users/:id/password', adminController.updateUserPassword);
+router.put('/users/:id/deactivate', adminController.deactivateUser);
 ```
 
-- `multer.diskStorage` Aqui le dice al servidor que guarde los archivos en `../uploads/*/` ya sea Materias o Tareas
--  También le cambia el nombre al archivo sumándole Date.now() (la fecha en milisegundos) para que si dos alumnos suben un `tarea.pdf`, no se sobrescriban.
-- `INSERT INTO` Una vez que Multer ha guardado el PDF físico en el disco duro, el código hace una consulta a PostgreSQL para guardar el título, la descripción y la ruta lógica (archivo_url) para poder encontrarlo después.
+### Funcionalidades:
+- **Control de Roles**: Permite cambiar el rango de cualquier usuario (ej. de alumno a profesor).
+- **Seguridad**: Ruta de emergencia para reseteo de contraseñas.
+- **Borrado Lógico**: La función de desactivación impide el acceso al usuario sin eliminar sus registros históricos (notas, asistencias), manteniendo la integridad referencial de la base de datos.
 
+---
 
-## 6. Descargas y Visibilidad
+##  Resumen de Desafíos Técnicos Superados
 
-```
-app.get("/api/download/materiales/:filename", ...);
-app.patch("/api/visibilidad/:tabla/:id", ...);
-```
-
-- Descargas: Utiliza la función `res.download(filePath)`, que empaqueta automáticamente el archivo del disco duro y fuerza al navegador del usuario a descargarlo en su ordenador.
-- Visibilidad: Es un endpoint dinámico. Usando un simple `UPDATE tabla SET es_visible = $1`, permite a los profesores ocultar o mostrar tareas/materiales con un solo clic como si fuera un interruptor.
-
-
-## 7. Entregas y Calificaciones
-
-```
-app.get("/api/tareas/:tareaId/entregas", ...);
-app.patch("/api/entregas/:id/calificar", ...);
-```
-
-- Obtener entregas: Usa un `JOIN` con la tabla `usuarios` para que el profesor no solo vea "Se entregó la tarea 4", sino que vea "Harry Potter entregó la tarea 4"
-- Calificar: Recibe una nota `nota` y un comentario `comentario_profesor` desde el frontend y actualiza esa fila específica en la base de datos
-
-
-## 8. El Arranque
-
-```
-const PORT = 3000;
-app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
-```
-
-Esto es para que se quede escucando al puerto 3000 de manera infinita a la espera de peticiones
-
-
-
-
+1. **Persistencia de Datos**: Configuración de volúmenes en Docker para evitar la pérdida de los archivos subidos en `/uploads`.
+2. **Optimización de Consultas**: Uso de `LEFT JOIN` en PostgreSQL para asegurar que los cursos aparezcan aunque no tengan materias o alumnos asignados.
+3. **Seguridad de Acceso**: Implementación de `Bcrypt` para asegurar que las contraseñas nunca se guarden en texto plano.
+4. **Modularización MVC**: Separación estricta entre Rutas, Controladores y Configuración de DB, facilitando el mantenimiento del proyecto.
 
 
