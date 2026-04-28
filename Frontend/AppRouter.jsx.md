@@ -1,4 +1,4 @@
-# 🗺️ Documentación Técnica Frontend: AppRouter.jsx
+#  Documentación Técnica Frontend: AppRouter.jsx
 
 El archivo `AppRouter.jsx` es el componente central de navegación de la aplicación React. Utiliza la librería `react-router-dom` para gestionar el enrutamiento del lado del cliente (Client-Side Routing), permitiendo navegar entre páginas sin tener que recargar el navegador.
 
@@ -53,7 +53,7 @@ La aplicación implementa un sistema de control de acceso basado en roles (Role-
 
 ---
 
-## 💡 Valor Técnico del Archivo (Para la presentación)
+##  Valor Técnico del Archivo 
 1. **Seguridad Frontend**: Al envolver las vistas sensibles con `ProtectedRoute`, nos aseguramos de que un alumno no pueda escribir `/admin` en su navegador y ver el panel de control. 
 2. **Experiencia de Usuario (UX) tipo SPA (Single Page Application)**: Gracias a `BrowserRouter`, la transición entre el Login y el panel del alumno es instantánea, sin recargas de página completas, dando la sensación de una aplicación nativa.
 3. **Mantenibilidad**: Si en el futuro se quiere añadir un panel para "Padres", solo hay que añadir un nuevo bloque `<Route>` protegido, sin tener que alterar el resto de la aplicación.
