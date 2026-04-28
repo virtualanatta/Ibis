@@ -1,3 +1,9 @@
+# Documentación Técnica: profesorRoutes.js
+
+Este archivo define el módulo de rutas dedicado exclusivamente a las operaciones de los profesores, respetando el principio de responsabilidad única.
+
+---
+
 ## 1. Importaciones del Enrutador
 
 ```
