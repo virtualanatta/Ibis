@@ -1,3 +1,8 @@
+# Documentación Técnica: cursosRoutes.js
+
+Este archivo es un módulo fundamental del sistema. Gestiona todo lo relacionado con las clases, los materiales, la subida de archivos físicos y las listas de matriculados.
+
+---
 
 ## 1. index.js
 
