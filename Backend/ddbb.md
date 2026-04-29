@@ -1,4 +1,4 @@
-# Documentación Técnica: Modelo y Diccionario de Datos (Proyecto CRIMSA)
+# Documentación Técnica: Modelo y Diccionario de Datos
 
 ## 1. Visión General
 La base de datos principal del sistema, denominada **`Danet`**, soporta la lógica de negocio de una plataforma educativa o entorno virtual de aprendizaje. Su diseño relacional (PostgreSQL) garantiza la integridad de los datos mediante el uso estricto de claves foráneas, restricciones de unicidad y borrados en cascada.
