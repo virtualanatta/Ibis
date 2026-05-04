@@ -10,11 +10,11 @@ Esta es la **documentación técnica completa** de una plataforma educativa priv
 
 ### ¿Qué tienes aquí?
 
-✅ **Documentación completa** para instalar Ibis Campus desde cero  
-✅ **50 archivos markdown** organizados en 9 secciones  
-✅ **Guías paso a paso** con ejemplos reales  
-✅ **Soluciones a problemas** que hemos encontrado  
-✅ **Listo para GitHub** (carpetas + archivos)
+ **Documentación completa** para instalar Ibis Campus desde cero  
+ **50 archivos markdown** organizados en 9 secciones  
+ **Guías paso a paso** con ejemplos reales  
+ **Soluciones a problemas** que hemos encontrado  
+ **Listo para GitHub** (carpetas + archivos)
 
 ### ¿Para quién es?
 
