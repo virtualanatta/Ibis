@@ -8,7 +8,7 @@ Documentación técnica completa de una plataforma educativa privada, 100% Docke
 
 ##  Tabla de Contenidos
 
-1. **[Guías de Instalación](#01-guias-instalacion)**
+1. **[Guías de Instalación](01-guias-instalacion)**
 2. **[Infraestructura](#02-infraestructura-hardware-y-redes)**
 3. **[Backend](#03-backend-nodejs-express)**
 4. **[Frontend](#04-frontend-react--vite)**
