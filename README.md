@@ -18,7 +18,6 @@ Documentación técnica completa de una plataforma educativa privada, 100% Docke
 8. **[Troubleshooting](08-troubleshooting)**
 9. **[Referencias](09-referencias)**
 10. **[Scripts](scripts-bash)**
-11. 
 ---
 
 ##  Visión General del Proyecto
