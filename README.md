@@ -8,15 +8,15 @@ Documentación técnica completa de una plataforma educativa privada, 100% Docke
 
 ##  Tabla de Contenidos
 
-1. **[Guías de Instalación](#-01-guías-de-instalación-desde-cero)**
-2. **[Infraestructura](#-02-infraestructura-hardware-y-redes)**
-3. **[Backend](#-03-backend-nodejs-express)**
-4. **[Frontend](#-04-frontend-react--vite)**
-5. **[Servicios](#-05-servicios-integrados)**
-6. **[Seguridad](#-06-seguridad-y-auditoría)**
-7. **[Automatización](#-07-automatización-y-monitorización)**
-8. **[Troubleshooting](#-08-troubleshooting-y-errores-comunes)**
-9. **[Referencias](#-09-referencias-técnicas)**
+1. **[Guías de Instalación](#01-guías-de-instalación-desde-cero)**
+2. **[Infraestructura](#02-infraestructura-hardware-y-redes)**
+3. **[Backend](#03-backend-nodejs-express)**
+4. **[Frontend](#04-frontend-react--vite)**
+5. **[Servicios](#05-servicios-integrados)**
+6. **[Seguridad](#06-seguridad-y-auditoría)**
+7. **[Automatización](#07-automatización-y-monitorización)**
+8. **[Troubleshooting](#08-troubleshooting-y-errores-comunes)**
+9. **[Referencias](#09-referencias-técnicas)**
 
 ---
 
