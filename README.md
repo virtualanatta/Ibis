@@ -205,7 +205,7 @@ Algunos valores mostrados son ejemplos. En tu instalación deberás:
 
 ##  Contacto y Soporte
 
-Este proyecto es un TFG de ASIR 2026. Para preguntas técnicas o reportar errores en la documentación, contacta al autor del proyecto.
+Este proyecto es un TFG de ASIR 2026
 
 ---
 
